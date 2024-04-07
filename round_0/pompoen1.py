@@ -10,7 +10,7 @@ class Trader:
     def run(self, state: TradingState):
         limits = {'AMETHYSTS': 20, 'STARFRUIT': 20}
         # Only method required. It takes all buy and sell orders for all symbols as an input, and outputs a list of orders to be sent
-        print('-----')
+        # print('-----')
         # print(jsonpickle.dumps(state, indent=4))
         
         # print("traderData: " + state.traderData)
@@ -36,7 +36,7 @@ class Trader:
             fair_price = self.calculate_fair_price(state, product, trader_data);  # Participant should calculate this value
 
 
-            print(state.position)
+            # print(state.position)
 
             # BUY
             asks = list(sorted(order_depth.sell_orders.items()))
@@ -222,7 +222,7 @@ if __name__ == "__main__":
     for timestamp in df['timestamp'].unique():
         if timestamp >= 20000:
             break
-        print(timestamp)
+        print('---', timestamp, '---')
         daily_df = df.loc[df['timestamp'] == timestamp, :]
         columns = daily_df.columns
 
@@ -264,7 +264,7 @@ if __name__ == "__main__":
 
         all_orders.append(result)
 
-    print(all_orders)
+    # print(all_orders)
         
 
 
