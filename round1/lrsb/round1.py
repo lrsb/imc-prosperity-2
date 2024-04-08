@@ -1,5 +1,4 @@
 '''PARAMS'''
-END_TIMESTAMP = 199900
 MAX_TRADER_DATA_LEN = 4
 
 # Product limits
@@ -8,7 +7,7 @@ POSITION_LIMIT = { 'STARFRUIT': 20, 'AMETHYSTS': 20 }
 # Traders params
 LIN_REG = { 'STARFRUIT': [0.5594, 0.2365, 0.1156, 0.0885] }
 QUOTES_SPREAD = { 'STARFRUIT': 1, 'AMETHYSTS': 1 }
-RISK_ADVERSION = { 'STARFRUIT': 1, 'AMETHYSTS': 1 }
+RISK_ADVERSION = { 'STARFRUIT': 1, 'AMETHYSTS': 2 }
 
 '''IMPORTS'''
 from datamodel import *
@@ -197,8 +196,8 @@ class AmethistsStarfruitTrader(BaseTrader):
 
     def compute_orders(self, product: str, state: TradingState, trader_data: dict) -> List[Order]:
         orders = []
-        asks = OrderedDict(sorted(state.order_depths[product].sell_orders.items()))
-        bids = OrderedDict(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
+        asks = OrderedDict[int, int](sorted(state.order_depths[product].sell_orders.items()))
+        bids = OrderedDict[int, int](sorted(state.order_depths[product].buy_orders.items(), reverse=True))
         midprice = trader_data['fair_price'][product]
 
         # Calculate trade limits
@@ -211,28 +210,14 @@ class AmethistsStarfruitTrader(BaseTrader):
         assert max_buy >= 0
         assert max_sell <= 0
 
-        avst = False
+        # Use a dynamic spread to better manage inventory
+        inventory_spread = RISK_ADVERSION[product] * inventory_current / inventory_limit
+        # If inventory is positive we increase bid-mid spread, always positive
+        buy_spread = max(inventory_spread, 0)
+        # If inventory is negative we increase ask-mid spread, always positive
+        sell_spread = -min(inventory_spread, 0)
 
-        if avst:
-            q = inventory_current / inventory_limit
-            gamma = RISK_ADVERSION[product]
-            sigma = np.std(trader_data['midprices'][product])
-            t = state.timestamp / END_TIMESTAMP
-            reservation_price = midprice - q * gamma * sigma ** 2 * (1 - t)
-            k = max(abs(sum(asks.values())) + abs(sum(bids.values())), 1)
-            delta = gamma * sigma ** 2 * (1 - t) + 2 / gamma * np.log(1 + gamma / k)
-
-            bid, ask = reservation_price - delta / 2, reservation_price + delta / 2
-
-        else:
-            # Use a dynamic spread to better manage inventory
-            inventory_spread = RISK_ADVERSION[product] * inventory_current / inventory_limit
-            # If inventory is positive we increase bid-mid spread, always positive
-            buy_spread = max(inventory_spread, 0)
-            # If inventory is negative we increase ask-mid spread, always positive
-            sell_spread = -min(inventory_spread, 0)
-
-            bid, ask = midprice - buy_spread, midprice + sell_spread
+        bid, ask = midprice - buy_spread, midprice + sell_spread
 
         self.logger.print(product, 'quotes', bid, ask)
 
@@ -250,7 +235,6 @@ class AmethistsStarfruitTrader(BaseTrader):
             if price < math.floor(midprice) and qnt:
                 trader_data['inventory_loss'][product] += abs((price - math.floor(midprice)) * qnt)
                 assert trader_data['inventory_loss'][product] >= 0
-
 
         # Match buy orders first, if the trade is convenient
         for price, qnt in bids.items():
@@ -298,7 +282,7 @@ class AmethistsStarfruitTrader(BaseTrader):
 '''TRADER'''
 class Trader:
     logger = Logger(local=False)
-    TRADERS =  [AmethistsStarfruitTrader()]
+    TRADERS = [AmethistsStarfruitTrader()]
 
     def local(self): self.logger = Logger(local=True)
 
