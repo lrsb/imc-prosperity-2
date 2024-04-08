@@ -1,7 +1,7 @@
-# IMC-Prosperity-2-2024
+# IMC Prosperity 2
 Working together to create algorithms for the IMC Prosperity 2 Challenge
 
 Useful tools:
 
-pip install -U prosperity2bt
-pip install -U prosperity2submit
+- Backtester: `pip install -U prosperity2bt`
+- Trader submitter: `pip install -U prosperity2submit`
