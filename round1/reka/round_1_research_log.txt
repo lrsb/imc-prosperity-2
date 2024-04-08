@@ -1,0 +1,14 @@
+From round0_iter1 (A: 1847, S:1622.917969) : Baseline
+iter 1 (A:1764, S:1742.639648): 
+- Surge pricing optimized over backtester
+iter 2 (A:1847, S:1743):
+- Combining baseline and iter 1 configuration
+
+Ideas:
+- Inventory in starfruits tend to be more limit constrained than in Ameth (Confirmed)
+- The current scheduling function thresholds might be too wide for Ameth (Rejected)
+- Backtester shows large deviation for amethysts. It seems that the backtester is a bit too optimistic
+- Limit order placement based on trade volume and frequency
+
+ToDo:
+- Need to check the consistency of the reference price 
