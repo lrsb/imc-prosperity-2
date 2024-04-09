@@ -11,13 +11,14 @@ iter 5 (A:1847 S:1735.680176):
 - Experimenting with assuming fixed spread
 iter 6 (A:1752 S:1742):
 - Model the reference price as MA(1)
+iter 7 ()
+- Incorporating lorenzo's scheduling functions
+iter 8 (A: 1768 S: 1671)
+- Testing skewed schedule
 
 Ideas:
 - Inventory in starfruits tend to be more limit constrained than in Ameth (Confirmed)
 - The current scheduling function thresholds might be too wide for Ameth (Rejected)
 - Backtester shows large deviation(well ~5%). It seems that the backtester is a tad bit too optimistic
-- Limit order placement based on trade volume and frequency
-- 
-
-ToDo:
-- Need to check the consistency of the reference price 
+- Limit order placement based on trade volume and frequency (Rejected)
+- The backtester has completely deviated from the website. 
