@@ -1,17 +1,3 @@
-# Params
-import bisect
-import random
-
-MAX_TRADER_DATA_LEN = 4
-
-# Product limits
-POSITION_LIMIT = { 'STARFRUIT': 20, 'AMETHYSTS': 20 }
-
-# Traders params
-QUOTES_SPREAD = { 'STARFRUIT': 1, 'AMETHYSTS': 1 }
-RISK_ADVERSION = { 'STARFRUIT': 1, 'AMETHYSTS': 2 }
-
-'''IMPORTS'''
 from datamodel import *
 from typing import *
 from collections import *
@@ -23,8 +9,12 @@ import math
 import copy
 import jsonpickle
 
+POSITION_LIMIT = {
+    'STARFRUIT': 20,
+    'AMETHYSTS': 20
+}
 
-'''LOGGING'''
+
 class Logger:
     local: bool
     local_logs: dict[int, str] = {}
@@ -45,8 +35,10 @@ class Logger:
             self.logs,
         ], cls=ProsperityEncoder, separators=(",", ":"))
 
-        if self.local: self.local_logs[state.timestamp] = output
-        else: print(output)
+        if self.local:
+            self.local_logs[state.timestamp] = output
+        else:
+            print(output)
 
         self.logs = ""
 
@@ -118,6 +110,8 @@ class Logger:
 '''TRADER BASE CLASS'''
 class BaseTrader:
     DEFAULT_TRADER_DATA = {}
+    logger = None
+
     def with_logger(self, logger: Logger):
         self.logger = logger
         return self
@@ -134,155 +128,145 @@ class BaseTrader:
 
 '''TRADER FOR STARFRUIT AND AMETHYSTS'''
 class AmethistsStarfruitTrader(BaseTrader):
-    DEFAULT_TRADER_DATA = { 'fair_price': int, 'volume': int, 'inventory_loss': float, 'exposure': float, 'midprices': list }
+    DEFAULT_TRADER_DATA = {'ref_price': int, 'volume': int, 'inventory_loss': float, 'exposure': float}
 
     def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
         result = {}
 
         # Create orders
         for product in ['STARFRUIT', 'AMETHYSTS']:
-            # Clean old data
-            if len(trader_data['midprices'][product]) >= MAX_TRADER_DATA_LEN:
-                trader_data['midprices'][product].pop(0)
-
-            # Calculate volume weighted mid price
-            book = state.order_depths[product]
-            if book.buy_orders and book.sell_orders:
-                sell = sorted(book.sell_orders.items(), reverse=True)[0][0]
-                buy = sorted(book.buy_orders.items())[0][0]
-
-                trader_data['midprices'][product].append((buy + sell) / 2)
-                self.logger.print(product, 'omp', buy, sell)
-            else:
-                trader_data['midprices'][product].append(trader_data['midprices'][product][-1])
-
             # Save volume
             if product in state.own_trades:
                 trader_data['volume'][product] += sum([trade.quantity for trade in state.own_trades[product] if trade.timestamp == state.timestamp - 100])
 
-            # Compute fair mid price
-            midprice = self.compute_product_price(product, trader_data)
+            # Compute reference price
+            ref_price = self.compute_product_price(product, state, trader_data)
 
             # Log exposure gain/loss
-            if product in trader_data['fair_price']:
-                trader_data['exposure'][product] += (midprice - trader_data['fair_price'][product]) * state.position.get(product, 0)
-            trader_data['fair_price'][product] = midprice
+            if product in trader_data['ref_price']:
+                trader_data['exposure'][product] += (ref_price - trader_data['ref_price'][product]) * state.position.get(product, 0)
 
             # Compute orders
-            result[product] = self.compute_orders(product, state, trader_data)
+            result[product] = self.compute_orders(product, ref_price, state, trader_data)
+            trader_data['ref_price'][product] = ref_price
 
         return result, 0
 
-
-    def compute_product_price(self, product: str, trader_data: dict) -> float:
-        computed_mid_price = None
-
+    def compute_product_price(self, product: str, state: TradingState, trader_data: dict) -> float:
         match product:
             case 'AMETHYSTS':
-                computed_mid_price = 10000
+                return 10000
 
             case 'STARFRUIT':
-                computed_mid_price = trader_data['midprices'][product][-1]
+                bid_book = list(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
+                ask_book = list(sorted(state.order_depths[product].sell_orders.items()))
+                if not bid_book or not ask_book:
+                    self.logger.print('EMPTY BOOK!!!')
+                    return trader_data['ref_price'][product] if product in trader_data['ref_price'] else 5000
 
-        return computed_mid_price
+                return (ask_book[-1][0] + bid_book[-1][0]) / 2
+
+    def compute_orders(self, product: str, ref_price: float, state: TradingState, trader_data: dict) -> List[Order]:
+        # Maximum positive exposure that we want to have if the profit is x
+        def buy_schedule(x: float) -> int:
+            match product:
+                case 'AMETHYSTS':
+                    return min(20, round(x * 10))
+                case 'STARFRUIT':
+                    return min(20, round(x * 8))
+
+        # Maximum negative exposure that we want to have if the profit is x
+        def sell_schedule(x: float) -> int:
+            match product:
+                case 'AMETHYSTS':
+                    return max(-20, round(-x * 10))
+                case 'STARFRUIT':
+                    return max(-20, round(-x * 8))
+
+        # Extract the relevant info from the trading_state
+        sold_position = state.position.get(product, 0)
+        bought_position = state.position.get(product, 0)
+        bid_book = list(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
+        ask_book = list(sorted(state.order_depths[product].sell_orders.items()))
+
+        # Placeholder for the emitted orders
+        result = []
+
+        # Removing stale orders
+        n_ask_book = []
+        for price, qty in ask_book:
+            curr_profit = ref_price - price
+            # we never take -EV trade, and the max positive exposure that we want to
+            # hold depends on the buy_schedule
+            if curr_profit >= 0 and buy_schedule(curr_profit) >= bought_position:
+                executed_buy = min(buy_schedule(curr_profit) - bought_position, -qty)
+                if executed_buy <= 0: continue
+                result.append(Order(product, price, executed_buy))
+                bought_position += executed_buy
+                if executed_buy != -qty:
+                    n_ask_book.append((price, qty + executed_buy))
+            else:
+                n_ask_book.append((price, qty))
+                if curr_profit > 0:
+                    trader_data['inventory_loss'][product] += abs(curr_profit * qty)
+                    assert trader_data['inventory_loss'][product] >= 0
+
+        ask_book = n_ask_book
+
+        n_bid_book = []
+        for price, qty in bid_book:
+            curr_profit = price - ref_price
+            # we never take -EV trade, and the max negative exposure that we want to
+            # hold depends on the sell_schedule
+            if curr_profit >= 0 and sell_schedule(curr_profit) <= sold_position:
+                executed_sell = min(sold_position - sell_schedule(curr_profit), qty)
+                if executed_sell <= 0: continue
+                result.append(Order(product, price, -executed_sell))
+                sold_position -= executed_sell
+                if executed_sell != qty:
+                    n_bid_book.append((price, qty - executed_sell))
+            else:
+                n_bid_book.append((price, qty))
+                if curr_profit > 0:
+                    trader_data['inventory_loss'][product] += abs(curr_profit * qty)
+                    assert trader_data['inventory_loss'][product] >= 0
+
+        bid_book = n_bid_book
+
+        # Placing limit orders
+        for price, qty in bid_book:
+            curr_profit = ref_price - (price + 1)
+            # we never take -EV trade, and the max positive exposure that we want to
+            # hold depends on the buy_schedule
+            if curr_profit >= 0 and buy_schedule(curr_profit) >= bought_position:
+                placed_buy = buy_schedule(curr_profit) - bought_position
+                if placed_buy <= 0: continue
+                result.append(Order(product, price + 1, placed_buy))
+                bought_position += placed_buy
+
+        for price, qty in ask_book:
+            curr_profit = (price - 1) - ref_price
+            # we never take -EV trade, and the max negative exposure that we want to
+            # hold depends on the sell_schedule
+            if curr_profit >= 0 and sell_schedule(curr_profit) <= sold_position:
+                placed_sell = sold_position - sell_schedule(curr_profit)
+                if placed_sell <= 0: continue
+                result.append(Order(product, price - 1, -placed_sell))
+                sold_position -= placed_sell
+
+        return result
 
 
-    def compute_orders(self, product: str, state: TradingState, trader_data: dict) -> List[Order]:
-        orders = []
-        asks = OrderedDict[int, int](sorted(state.order_depths[product].sell_orders.items()))
-        bids = OrderedDict[int, int](sorted(state.order_depths[product].buy_orders.items(), reverse=True))
-        midprice = trader_data['fair_price'][product]
-
-        # Calculate trade limits
-        inventory_limit = POSITION_LIMIT[product]
-        inventory_current = state.position.get(product, 0)
-
-        max_buy = inventory_limit - inventory_current
-        max_sell = -inventory_limit - inventory_current
-
-        assert max_buy >= 0
-        assert max_sell <= 0
-
-        # Use a dynamic spread to better manage inventory
-        inventory_spread = RISK_ADVERSION[product] * inventory_current / inventory_limit
-        # If inventory is positive we increase bid-mid spread, always positive
-        buy_spread = max(inventory_spread, 0)
-        # If inventory is negative we increase ask-mid spread, always positive
-        sell_spread = -min(inventory_spread, 0)
-
-        bid, ask = midprice - buy_spread, midprice + sell_spread
-
-        self.logger.print(product, 'quotes', bid, ask)
-
-        # Match sell orders first, if the trade is convenient
-        for price, qnt in asks.items():
-            if price <= bid and max_buy > 0:
-                size = min(-qnt, max_buy)
-                asks[price] += size
-                orders.append(Order(product, price, size))
-
-                max_buy -= size
-                assert max_buy >= 0
-
-        for price, qnt in asks.items():
-            if price < math.floor(midprice) and qnt:
-                trader_data['inventory_loss'][product] += abs((price - math.floor(midprice)) * qnt)
-                assert trader_data['inventory_loss'][product] >= 0
-
-        # Match buy orders first, if the trade is convenient
-        for price, qnt in bids.items():
-            if price >= ask and max_sell < 0:
-                size = min(qnt, -max_sell)
-                bids[price] -= size
-                orders.append(Order(product, price, -size))
-
-                max_sell += size
-                assert max_sell <= 0
-
-        for price, qnt in bids.items():
-            if price > math.ceil(midprice) and qnt:
-                trader_data['inventory_loss'][product] += abs((price - math.ceil(midprice)) * qnt)
-                assert trader_data['inventory_loss'][product] >= 0
-
-        # TODO instead of providing quotes better than market, place them near midprice based on historical bot volumes.
-        # there are trades happening even if we provided quotes
-
-        # And then provide a buy quote for bots above best feasible bid (highest bid that is less than or equal to our bid)
-        if max_buy:
-            placed = False
-            for price, qnt in bids.items():
-                if qnt and price + QUOTES_SPREAD[product] <= bid:
-                    orders.append(Order(product, price + QUOTES_SPREAD[product], max_buy))
-                    placed = True
-                    break
-
-            if not placed: orders.append(Order(product, math.floor(bid), max_buy))
-
-        # And then provide a sell quote for bots below best feasible ask (smallest ask that is greater than or equal to our ask)
-        if max_sell:
-            placed = False
-            for price, qnt in asks.items():
-                if qnt and price - QUOTES_SPREAD[product] >= ask:
-                    orders.append(Order(product, price - QUOTES_SPREAD[product], max_sell))
-                    placed = True
-                    break
-
-            if not placed: orders.append(Order(product, math.ceil(ask), max_sell))
-
-        return orders
-
-
-'''TRADER'''
 class Trader:
     logger = Logger(local=False)
     TRADERS = [AmethistsStarfruitTrader()]
 
-    def local(self): self.logger = Logger(local=True)
+    def local(self):
+        self.logger = Logger(local=True)
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         # Load or create trader data
         trader_data = json.loads(state.traderData) if state.traderData else {}
-        # Reduce logs size state.traderData = ''
 
         result = {}
         conversions = 0

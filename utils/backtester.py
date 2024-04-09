@@ -1,4 +1,4 @@
-from round1.lrsb.round1 import Trader
+from round1.round1_trader import Trader
 
 from datamodel import *
 from typing import Any  #, Callable
