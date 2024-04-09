@@ -110,9 +110,7 @@ class Logger:
 '''TRADER BASE CLASS'''
 class BaseTrader:
     DEFAULT_TRADER_DATA = {}
-
-    def __init__(self):
-        self.logger = None
+    logger = None
 
     def with_logger(self, logger: Logger):
         self.logger = logger
@@ -141,7 +139,7 @@ class AmethistsStarfruitTrader(BaseTrader):
             if product in state.own_trades:
                 trader_data['volume'][product] += sum([trade.quantity for trade in state.own_trades[product] if trade.timestamp == state.timestamp - 100])
 
-            # Compute fair mid price
+            # Compute reference price
             ref_price = self.compute_product_price(product, state, trader_data)
 
             # Log exposure gain/loss
@@ -149,8 +147,8 @@ class AmethistsStarfruitTrader(BaseTrader):
                 trader_data['exposure'][product] += (ref_price - trader_data['ref_price'][product]) * state.position.get(product, 0)
 
             # Compute orders
-            trader_data['ref_price'][product] = ref_price
             result[product] = self.compute_orders(product, ref_price, state, trader_data)
+            trader_data['ref_price'][product] = ref_price
 
         return result, 0
 
@@ -202,7 +200,7 @@ class AmethistsStarfruitTrader(BaseTrader):
             # hold depends on the buy_schedule
             if curr_profit >= 0 and buy_schedule(curr_profit) >= bought_position:
                 executed_buy = min(buy_schedule(curr_profit) - bought_position, -qty)
-                if not executed_buy: continue
+                if executed_buy <= 0: continue
                 result.append(Order(product, price, executed_buy))
                 bought_position += executed_buy
                 if executed_buy != -qty:
@@ -222,7 +220,7 @@ class AmethistsStarfruitTrader(BaseTrader):
             # hold depends on the sell_schedule
             if curr_profit >= 0 and sell_schedule(curr_profit) <= sold_position:
                 executed_sell = min(sold_position - sell_schedule(curr_profit), qty)
-                if not executed_sell: continue
+                if executed_sell <= 0: continue
                 result.append(Order(product, price, -executed_sell))
                 sold_position -= executed_sell
                 if executed_sell != qty:
@@ -242,7 +240,7 @@ class AmethistsStarfruitTrader(BaseTrader):
             # hold depends on the buy_schedule
             if curr_profit >= 0 and buy_schedule(curr_profit) >= bought_position:
                 placed_buy = buy_schedule(curr_profit) - bought_position
-                if not placed_buy: continue
+                if placed_buy <= 0: continue
                 result.append(Order(product, price + 1, placed_buy))
                 bought_position += placed_buy
 
@@ -252,7 +250,7 @@ class AmethistsStarfruitTrader(BaseTrader):
             # hold depends on the sell_schedule
             if curr_profit >= 0 and sell_schedule(curr_profit) <= sold_position:
                 placed_sell = sold_position - sell_schedule(curr_profit)
-                if not placed_sell: continue
+                if placed_sell <= 0: continue
                 result.append(Order(product, price - 1, -placed_sell))
                 sold_position -= placed_sell
 
