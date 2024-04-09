@@ -7,7 +7,10 @@ iter 3_ref (A:1702, S:1599.917969) vs iter 3 (A:1480 S:1393.917969):
 - Adding queue maximization 
 iter 4 (A:1591, S: 1595.917969):
 - Queue maximization certainly does not add anything
-
+iter 5 (A:1847 S:1735.680176):
+- Experimenting with assuming fixed spread
+iter 6 (A:1752 S:1742):
+- Model the reference price as MA(1)
 
 Ideas:
 - Inventory in starfruits tend to be more limit constrained than in Ameth (Confirmed)
