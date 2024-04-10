@@ -100,9 +100,6 @@ def StarTrader(state: TradingState, trader_data: dict) -> List[Order]:
         return max(-20, round(-x * 10))
     
     symbol = "STARFRUIT"
-
-
-
  
     # Extract the relevant info from the trading_state
     sold_position = state.position.get(symbol,0)
@@ -113,14 +110,17 @@ def StarTrader(state: TradingState, trader_data: dict) -> List[Order]:
     # Use the outermost prices as ref_price
     ref_price = (ask_book[-1][0] + bid_book[-1][0])/2.0
 
-    position_goal = 0
-    price_change = trader_data[symbol]['prices'][-1] - trader_data[symbol]['prices'][0]
-    if len(trader_data[symbol]['prices']) >= 20 and price_change >= 3:
-        # ref_price += 1
-        position_goal = 3
-    # elif len(trader_data[symbol]['prices']) >= 20 and price_change <= -3:
-    #     position_goal = -3
-        # ref_price -= 1
+
+    # NUMBERS ARE FROM LAST YEAR STANFORD #2 TEAM
+    if len(trader_data[symbol]['prices']) > 3:
+        coef = [-0.01869561,  0.0455032 ,  0.16316049,  0.8090892]
+        intercept = 4.481696494462085
+        nxt_price = intercept
+        for i, val in enumerate(trader_data[symbol]['prices'][-4:]):
+            nxt_price += val * coef[i]
+
+        ref_price = int(round(nxt_price))
+
 
     # Placeholder for the emitted orders
     result = []
@@ -131,7 +131,7 @@ def StarTrader(state: TradingState, trader_data: dict) -> List[Order]:
         curr_profit = ref_price - price
         # we never take -EV trade, and the max positive exposure that we want to
         # hold depends on the buy_schedule
-        if curr_profit >= 0 and buy_schedule(curr_profit) > bought_position - position_goal:
+        if curr_profit >= 0 and buy_schedule(curr_profit) > bought_position:
             executed_buy = min(buy_schedule(curr_profit) - bought_position, -qty)
             result.append(Order(symbol, price, executed_buy))
             bought_position += executed_buy
@@ -146,7 +146,7 @@ def StarTrader(state: TradingState, trader_data: dict) -> List[Order]:
         curr_profit =  price - ref_price
         # we never take -EV trade, and the max negative exposure that we want to
         # hold depends on the sell_schedule
-        if curr_profit >= 0 and sell_schedule(curr_profit) < sold_position + position_goal:
+        if curr_profit >= 0 and sell_schedule(curr_profit) < sold_position:
             executed_sell = min( sold_position - sell_schedule(curr_profit), qty)
             result.append(Order(symbol, price, -executed_sell))
             sold_position -= executed_sell
@@ -161,7 +161,7 @@ def StarTrader(state: TradingState, trader_data: dict) -> List[Order]:
         curr_profit = ref_price - (price+1)
         # we never take -EV trade, and the max positive exposure that we want to
         # hold depends on the buy_schedule
-        if curr_profit >= 0 and buy_schedule(curr_profit) > bought_position - position_goal:
+        if curr_profit >= 0 and buy_schedule(curr_profit) > bought_position:
             placed_buy = buy_schedule(curr_profit) - bought_position
             result.append(Order(symbol, price+1, placed_buy))
             bought_position += placed_buy
@@ -170,7 +170,7 @@ def StarTrader(state: TradingState, trader_data: dict) -> List[Order]:
         curr_profit =  (price-1) - ref_price
         # we never take -EV trade, and the max negative exposure that we want to
         # hold depends on the sell_schedule
-        if curr_profit >= 0 and sell_schedule(curr_profit) < sold_position + position_goal:
+        if curr_profit >= 0 and sell_schedule(curr_profit) < sold_position:
             placed_sell = sold_position-sell_schedule(curr_profit)
             result.append(Order(symbol, price-1, -placed_sell))
             sold_position -= placed_sell
