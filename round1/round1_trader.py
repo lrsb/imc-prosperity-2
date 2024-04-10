@@ -9,11 +9,8 @@ import math
 import copy
 import jsonpickle
 
-POSITION_LIMIT = {
-    'STARFRUIT': 20,
-    'AMETHYSTS': 20
-}
-
+POSITION_LIMIT = {'AMETHYSTS': 20, 'STARFRUIT': 20}
+UNDERCUT_SPREAD = {'AMETHYSTS': 1, 'STARFRUIT': 1}
 
 class Logger:
     local: bool
@@ -132,6 +129,7 @@ class AmethistsStarfruitTrader(BaseTrader):
 
     def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
         result = {}
+        conversions = 0
 
         # Create orders
         for product in ['STARFRUIT', 'AMETHYSTS']:
@@ -150,7 +148,7 @@ class AmethistsStarfruitTrader(BaseTrader):
             result[product] = self.compute_orders(product, ref_price, state, trader_data)
             trader_data['ref_price'][product] = ref_price
 
-        return result, 0
+        return result, conversions
 
     def compute_product_price(self, product: str, state: TradingState, trader_data: dict) -> float:
         match product:
@@ -198,9 +196,8 @@ class AmethistsStarfruitTrader(BaseTrader):
             curr_profit = ref_price - price
             # we never take -EV trade, and the max positive exposure that we want to
             # hold depends on the buy_schedule
-            if curr_profit >= 0 and buy_schedule(curr_profit) >= bought_position:
-                executed_buy = min(buy_schedule(curr_profit) - bought_position, -qty)
-                if executed_buy <= 0: continue
+            executed_buy = min(buy_schedule(curr_profit) - bought_position, -qty)
+            if curr_profit >= 0 and executed_buy > 0:
                 result.append(Order(product, price, executed_buy))
                 bought_position += executed_buy
                 if executed_buy != -qty:
@@ -218,9 +215,8 @@ class AmethistsStarfruitTrader(BaseTrader):
             curr_profit = price - ref_price
             # we never take -EV trade, and the max negative exposure that we want to
             # hold depends on the sell_schedule
-            if curr_profit >= 0 and sell_schedule(curr_profit) <= sold_position:
-                executed_sell = min(sold_position - sell_schedule(curr_profit), qty)
-                if executed_sell <= 0: continue
+            executed_sell = min(sold_position - sell_schedule(curr_profit), qty)
+            if curr_profit >= 0 and executed_sell > 0:
                 result.append(Order(product, price, -executed_sell))
                 sold_position -= executed_sell
                 if executed_sell != qty:
@@ -233,26 +229,32 @@ class AmethistsStarfruitTrader(BaseTrader):
 
         bid_book = n_bid_book
 
+        price = None
         # Placing limit orders
         for price, qty in bid_book:
-            curr_profit = ref_price - (price + 1)
+            curr_profit = ref_price - (price + UNDERCUT_SPREAD[product])
             # we never take -EV trade, and the max positive exposure that we want to
             # hold depends on the buy_schedule
-            if curr_profit >= 0 and buy_schedule(curr_profit) >= bought_position:
-                placed_buy = buy_schedule(curr_profit) - bought_position
-                if placed_buy <= 0: continue
-                result.append(Order(product, price + 1, placed_buy))
+            placed_buy = buy_schedule(curr_profit) - bought_position
+            if curr_profit >= 0 and placed_buy > 0:
+                result.append(Order(product, price + UNDERCUT_SPREAD[product], placed_buy))
                 bought_position += placed_buy
 
+        if POSITION_LIMIT[product] - bought_position > 0:
+            result.append(Order(product, (price if price is not None else ref_price) - 1, POSITION_LIMIT[product] - bought_position))
+
+        price = None
         for price, qty in ask_book:
-            curr_profit = (price - 1) - ref_price
+            curr_profit = (price - UNDERCUT_SPREAD[product]) - ref_price
             # we never take -EV trade, and the max negative exposure that we want to
             # hold depends on the sell_schedule
-            if curr_profit >= 0 and sell_schedule(curr_profit) <= sold_position:
-                placed_sell = sold_position - sell_schedule(curr_profit)
-                if placed_sell <= 0: continue
-                result.append(Order(product, price - 1, -placed_sell))
+            placed_sell = sold_position - sell_schedule(curr_profit)
+            if curr_profit >= 0 and placed_sell > 0:
+                result.append(Order(product, price - UNDERCUT_SPREAD[product], -placed_sell))
                 sold_position -= placed_sell
+
+        if sold_position - POSITION_LIMIT[product] > 0:
+            result.append(Order(product, (price if price is not None else ref_price) + 1, sold_position - POSITION_LIMIT[product]))
 
         return result
 
@@ -283,7 +285,7 @@ class Trader:
 
         # Check order limits
         for product, orders in result.items():
-            assert sum([order.quantity for order in orders if order.quantity > 0]) + state.position.get(product, 0) <= POSITION_LIMIT[product]
-            assert sum([order.quantity for order in orders if order.quantity < 0]) + state.position.get(product, 0) >= -POSITION_LIMIT[product]
+            assert sum([order.quantity for order in orders if order.quantity > 0]) + state.position.get(product, 0) <= POSITION_LIMIT[product], state.timestamp
+            assert sum([order.quantity for order in orders if order.quantity < 0]) + state.position.get(product, 0) >= -POSITION_LIMIT[product], state.timestamp
 
         return result, conversions, trader_data_json
