@@ -166,25 +166,24 @@ class AmethistsStarfruitTrader(BaseTrader):
 
     def compute_orders(self, product: str, ref_price: float, state: TradingState, trader_data: dict) -> List[Order]:
         # Maximum positive exposure that we want to have if the profit is x
-        def buy_schedule(x: float, inventory: float) -> int:
+        def buy_schedule(x: float) -> int:
             match product:
                 case 'AMETHYSTS':
-                    return min(20, round(x * 10 + inventory))
+                    return min(20, round(x * 10))
                 case 'STARFRUIT':
-                    return min(20, round(x * 8 + 4 * inventory))
+                    return min(20, round(x * 8))
 
         # Maximum negative exposure that we want to have if the profit is x
-        def sell_schedule(x: float, inventory: float) -> int:
+        def sell_schedule(x: float) -> int:
             match product:
                 case 'AMETHYSTS':
-                    return max(-20, round(-x * 10 - inventory))
+                    return max(-20, round(-x * 10))
                 case 'STARFRUIT':
-                    return max(-20, round(-x * 8 - 4 * inventory))
+                    return max(-20, round(-x * 8))
 
         # Extract the relevant info from the trading_state
         sold_position = state.position.get(product, 0)
         bought_position = state.position.get(product, 0)
-        current_inventory = state.position.get(product, 0) / POSITION_LIMIT[product]
 
         bid_book = list(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
         ask_book = list(sorted(state.order_depths[product].sell_orders.items()))
@@ -198,7 +197,7 @@ class AmethistsStarfruitTrader(BaseTrader):
             curr_profit = ref_price - price
             # we never take -EV trade, and the max positive exposure that we want to
             # hold depends on the buy_schedule
-            executed_buy = min(buy_schedule(curr_profit, current_inventory) - bought_position, -qty)
+            executed_buy = min(buy_schedule(curr_profit) - bought_position, -qty)
             if curr_profit >= 0 and executed_buy > 0:
                 result.append(Order(product, price, executed_buy))
                 bought_position += executed_buy
@@ -217,7 +216,7 @@ class AmethistsStarfruitTrader(BaseTrader):
             curr_profit = price - ref_price
             # we never take -EV trade, and the max negative exposure that we want to
             # hold depends on the sell_schedule
-            executed_sell = min(sold_position - sell_schedule(curr_profit, current_inventory), qty)
+            executed_sell = min(sold_position - sell_schedule(curr_profit), qty)
             if curr_profit >= 0 and executed_sell > 0:
                 result.append(Order(product, price, -executed_sell))
                 sold_position -= executed_sell
@@ -237,26 +236,28 @@ class AmethistsStarfruitTrader(BaseTrader):
             curr_profit = ref_price - (price + UNDERCUT_SPREAD[product])
             # we never take -EV trade, and the max positive exposure that we want to
             # hold depends on the buy_schedule
-            placed_buy = buy_schedule(curr_profit, current_inventory) - bought_position
+            placed_buy = buy_schedule(curr_profit) - bought_position
             if curr_profit >= 0 and placed_buy > 0:
                 result.append(Order(product, price + UNDERCUT_SPREAD[product], placed_buy))
                 bought_position += placed_buy
 
-        if POSITION_LIMIT[product] - bought_position > 0:
-            result.append(Order(product, (price if price is not None else ref_price) - 1, POSITION_LIMIT[product] - bought_position))
+        if POSITION_LIMIT[product] > bought_position:
+            self.logger.print('Incomplete buy book', [res for res in result if res.quantity > 0])
+            result.append(Order(product, price if price is not None else (ref_price - 1), POSITION_LIMIT[product] - bought_position))
 
         price = None
         for price, qty in ask_book:
             curr_profit = (price - UNDERCUT_SPREAD[product]) - ref_price
             # we never take -EV trade, and the max negative exposure that we want to
             # hold depends on the sell_schedule
-            placed_sell = sold_position - sell_schedule(curr_profit, current_inventory)
+            placed_sell = sold_position - sell_schedule(curr_profit)
             if curr_profit >= 0 and placed_sell > 0:
                 result.append(Order(product, price - UNDERCUT_SPREAD[product], -placed_sell))
                 sold_position -= placed_sell
 
-        if sold_position - POSITION_LIMIT[product] > 0:
-            result.append(Order(product, (price if price is not None else ref_price) + 1, sold_position - POSITION_LIMIT[product]))
+        if POSITION_LIMIT[product] > -sold_position:
+            self.logger.print('Incomplete sell book', [res for res in result if res.quantity < 0])
+            result.append(Order(product, price if price is not None else (ref_price + 1), -POSITION_LIMIT[product] - sold_position))
 
         return result
 
@@ -285,9 +286,10 @@ class Trader:
         trader_data_json = json.dumps(trader_data, indent=2)
         self.logger.flush(state, result, conversions, trader_data_json)
 
-        # Check order limits
+        # Check orders
         for product, orders in result.items():
-            assert sum([order.quantity for order in orders if order.quantity > 0]) + state.position.get(product, 0) <= POSITION_LIMIT[product], state.timestamp
-            assert sum([order.quantity for order in orders if order.quantity < 0]) + state.position.get(product, 0) >= -POSITION_LIMIT[product], state.timestamp
+            assert all([order.quantity != 0 for order in orders]), state.timestamp
+            assert sum([order.quantity for order in orders if order.quantity > 0]) + state.position.get(product, 0) == POSITION_LIMIT[product], state.timestamp
+            assert sum([order.quantity for order in orders if order.quantity < 0]) + state.position.get(product, 0) == -POSITION_LIMIT[product], state.timestamp
 
         return result, conversions, trader_data_json
