@@ -107,9 +107,9 @@ def StarTrader(state: TradingState, trader_data: dict) -> List[Order]:
     bid_book = list(sorted(state.order_depths[symbol].buy_orders.items(), reverse=True))
     ask_book = list(sorted(state.order_depths[symbol].sell_orders.items()))
 
+
     # Use the outermost prices as ref_price
     ref_price = (ask_book[-1][0] + bid_book[-1][0])/2.0
-
 
     # NUMBERS ARE FROM LAST YEAR STANFORD #2 TEAM
     if len(trader_data[symbol]['prices']) > 3:
