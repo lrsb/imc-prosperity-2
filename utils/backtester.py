@@ -180,10 +180,10 @@ def simulate_alternative(
         monkeys=False,
         monkey_names=['Caesar', 'Camilla', 'Peter']
 ):
-    prices_path = os.path.join(TRAINING_DATA_PREFIX, f'prices_round_{round - 1}_day_{day}.csv')
-    trades_path = os.path.join(TRAINING_DATA_PREFIX, f'trades_round_{round - 1}_day_{day}_wn.csv')
+    prices_path = os.path.join(TRAINING_DATA_PREFIX, f'prices_round_{round}_day_{day}.csv')
+    trades_path = os.path.join(TRAINING_DATA_PREFIX, f'trades_round_{round}_day_{day}_wn.csv')
     if not names:
-        trades_path = os.path.join(TRAINING_DATA_PREFIX, f'trades_round_{round - 1}_day_{day}_nn.csv')
+        trades_path = os.path.join(TRAINING_DATA_PREFIX, f'trades_round_{round}_day_{day}_nn.csv')
     df_prices = pd.read_csv(prices_path, sep=';')
     df_trades = pd.read_csv(trades_path, sep=';', dtype={ 'seller': str, 'buyer': str })
 
@@ -527,7 +527,7 @@ if __name__ == "__main__":
     if max_time < 10:
         max_time *= 100000
     round = 1#int(input("Input a round (blank for 1): ") or 1)
-    day = -2#int(input("Input a day (blank for -2): ") or -2)
+    day = 0#int(input("Input a day (blank for -2): ") or -2)
     #names_in = input("With bot names (default: n) (y/n): ")
     names = False
     #if 'n' in names_in:
