@@ -9,7 +9,7 @@ import math
 import copy
 import jsonpickle
 
-POSITION_LIMIT = {'AMETHYSTS': 20, 'STARFRUIT': 20}
+POSITION_LIMIT = {'AMETHYSTS': 20, 'STARFRUIT': 20, 'ORCHIDS': 100}
 UNDERCUT_SPREAD = {'AMETHYSTS': 1, 'STARFRUIT': 1}
 
 class Logger:
@@ -125,7 +125,7 @@ class BaseTrader:
 
 '''TRADER FOR STARFRUIT AND AMETHYSTS'''
 class AmethistsStarfruitTrader(BaseTrader):
-    DEFAULT_TRADER_DATA = {'ref_price': int, 'volume': int, 'inventory_loss': float, 'exposure': float}
+    DEFAULT_TRADER_DATA = {'ref_price': float, 'volume': int, 'inventory_loss': float, 'exposure': float}
 
     def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
         result = {}
@@ -143,10 +143,11 @@ class AmethistsStarfruitTrader(BaseTrader):
             # Log exposure gain/loss
             if product in trader_data['ref_price']:
                 trader_data['exposure'][product] += (ref_price - trader_data['ref_price'][product]) * state.position.get(product, 0)
+            trader_data['ref_price'][product] = ref_price
 
             # Compute orders
+            if ref_price is None: continue
             result[product] = self.compute_orders(product, ref_price, state, trader_data)
-            trader_data['ref_price'][product] = ref_price
 
         return result, conversions
 
@@ -158,10 +159,9 @@ class AmethistsStarfruitTrader(BaseTrader):
             case 'STARFRUIT':
                 bid_book = list(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
                 ask_book = list(sorted(state.order_depths[product].sell_orders.items()))
-
                 if not bid_book or not ask_book:
                     self.logger.print('EMPTY BOOK!!!')
-                    return trader_data['ref_price'][product] if product in trader_data['ref_price'] else 5000
+                    return trader_data['ref_price'][product] if product in trader_data['ref_price'] else None
 
                 return (ask_book[-1][0] + bid_book[-1][0]) / 2
 
@@ -206,10 +206,9 @@ class AmethistsStarfruitTrader(BaseTrader):
                     n_ask_book.append((price, qty + executed_buy))
             else:
                 n_ask_book.append((price, qty))
-
-            if curr_profit > 0:
-                trader_data['inventory_loss'][product] += abs(curr_profit * (qty + executed_buy))
-                assert trader_data['inventory_loss'][product] >= 0
+                if curr_profit > 0:
+                    trader_data['inventory_loss'][product] += abs(curr_profit * qty)
+                    assert trader_data['inventory_loss'][product] >= 0
 
         ask_book = n_ask_book
 
@@ -226,10 +225,9 @@ class AmethistsStarfruitTrader(BaseTrader):
                     n_bid_book.append((price, qty - executed_sell))
             else:
                 n_bid_book.append((price, qty))
-
-            if curr_profit > 0:
-                trader_data['inventory_loss'][product] += abs(curr_profit * (qty - executed_sell))
-                assert trader_data['inventory_loss'][product] >= 0
+                if curr_profit > 0:
+                    trader_data['inventory_loss'][product] += abs(curr_profit * qty)
+                    assert trader_data['inventory_loss'][product] >= 0
 
         bid_book = n_bid_book
 
@@ -246,7 +244,7 @@ class AmethistsStarfruitTrader(BaseTrader):
 
         if POSITION_LIMIT[product] > bought_position:
             self.logger.print('Incomplete buy book', [res for res in result if res.quantity > 0])
-            result.append(Order(product, price if price is not None else math.floor(ref_price - UNDERCUT_SPREAD[product]), POSITION_LIMIT[product] - bought_position))
+            result.append(Order(product, price if price is not None else math.floor(ref_price - 1), POSITION_LIMIT[product] - bought_position))
 
         price = None
         for price, qty in ask_book:
@@ -260,14 +258,92 @@ class AmethistsStarfruitTrader(BaseTrader):
 
         if POSITION_LIMIT[product] > -sold_position:
             self.logger.print('Incomplete sell book', [res for res in result if res.quantity < 0])
-            result.append(Order(product, price if price is not None else math.ceil(ref_price + UNDERCUT_SPREAD[product]), -POSITION_LIMIT[product] - sold_position))
+            result.append(Order(product, price if price is not None else math.ceil(ref_price + 1), -POSITION_LIMIT[product] - sold_position))
 
         return result
 
 
+'''TRADER FOR ORCHIDS'''
+class OrchidsTrader(BaseTrader):
+    DEFAULT_TRADER_DATA = {'conversions': int, 'volume': int, 'island_inventory': int, 'exposure': float, 'ref_price': float}
+
+    def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
+        result = {}
+        conversions = 0
+
+        for product in ['ORCHIDS']:
+            # Save volume
+            if product in state.own_trades:
+                trader_data['volume'][product] += sum([trade.quantity for trade in state.own_trades[product] if trade.timestamp == state.timestamp - 100])
+
+            # Save island inventory
+            if product in state.market_trades:
+                trader_data['island_inventory'][product] += sum([trade.quantity for trade in state.market_trades[product] if trade.timestamp == state.timestamp - 100])
+
+            # Log exposure gain/loss
+            conversion_observation = state.observations.conversionObservations[product]
+
+            ref_price = (conversion_observation.askPrice + conversion_observation.bidPrice) / 2
+            if product in trader_data['ref_price']:
+                trader_data['exposure'][product] += (ref_price - trader_data['ref_price'][product]) * state.position.get(product, 0)
+            trader_data['ref_price'][product] = ref_price
+
+            # Generate orders and conversions
+            product_orders, product_conversions = self.compute_orders_conversions(product, state, conversion_observation)
+            result[product] = product_orders
+            conversions += product_conversions
+            trader_data['conversions'][product] +=product_conversions
+
+        return result, conversions
+
+    def compute_orders_conversions(self, product: str, state: TradingState, conversion_observation: ConversionObservation) -> tuple[List[Order], int]:
+        bid_book = list(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
+        best_ask = min(state.order_depths[product].sell_orders.keys())
+        best_bid = max(state.order_depths[product].buy_orders.keys())
+
+        south_ask = conversion_observation.askPrice + conversion_observation.importTariff + conversion_observation.transportFees
+        south_bid = conversion_observation.bidPrice - conversion_observation.exportTariff - conversion_observation.transportFees
+        self.logger.print('south island quotes', south_bid, south_ask)
+
+        sold_position = state.position.get(product, 0)
+
+        orders = []
+        conversions = 0
+
+        for price, qty in bid_book:
+            arbitrage_profit = price - south_ask
+            if arbitrage_profit > 0 and sold_position <= 0:
+                self.logger.print('conversion (price, qty, profit):', price, qty, arbitrage_profit * qty)
+                conversions += qty
+                sold_position += qty
+        if product in state.own_trades:
+            trades_to_convert = sum([trade.quantity for trade in state.own_trades[product] if trade.timestamp == state.timestamp - 100 and trade.price > south_ask])
+            conversions += trades_to_convert
+            sold_position += trades_to_convert
+
+        for price, qty in bid_book:
+            # Find a way to manage conversions and inventory
+            #target_inventory = -10
+
+            executed_sell = min(sold_position + POSITION_LIMIT[product] - 60, qty)
+            immediate_trade_loss = best_bid - price
+
+            # Use also volume
+            if executed_sell > 0 and immediate_trade_loss < 5:
+                orders.append(Order(product, price, -executed_sell))
+                sold_position -= executed_sell
+
+        # Liquidity here is very correlated with market conditions, if sunlight is low or humidity out of interval, bots are willing to trade more
+        orders.append(Order(product, math.ceil(south_ask + 2), -POSITION_LIMIT[product] - sold_position))
+
+        return orders, conversions
+
+
 class Trader:
     logger = Logger(local=False)
-    TRADERS = [AmethistsStarfruitTrader()]
+    #TRADERS = [AmethistsStarfruitTrader(), OrchidsTrader()]
+    #TRADERS = [AmethistsStarfruitTrader()]
+    TRADERS = [OrchidsTrader()]
 
     def local(self):
         self.logger = Logger(local=True)
@@ -288,11 +364,5 @@ class Trader:
         # Save trader data (pretty print for visualizer) and logs
         trader_data_json = json.dumps(trader_data, indent=2)
         self.logger.flush(state, result, conversions, trader_data_json)
-
-        # Check orders
-        for product, orders in result.items():
-            assert all([order.quantity != 0 for order in orders]), state.timestamp
-            assert sum([order.quantity for order in orders if order.quantity > 0]) + state.position.get(product, 0) == POSITION_LIMIT[product], state.timestamp
-            assert sum([order.quantity for order in orders if order.quantity < 0]) + state.position.get(product, 0) == -POSITION_LIMIT[product], state.timestamp
 
         return result, conversions, trader_data_json
