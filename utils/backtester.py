@@ -49,6 +49,7 @@ fourth_round = third_round + ['BAGUETTE', 'DIP', 'UKULELE', 'PICNIC_BASKET']
 fifth_round = fourth_round # + secret, maybe pirate gold?
 
 SYMBOLS_BY_ROUND = {
+    0: first_round,
     1: first_round,
     2: snd_round,
     3: third_round,
@@ -63,6 +64,7 @@ fourth_round_pst = third_round_pst + ['BAGUETTE', 'DIP', 'UKULELE', 'PICNIC_BASK
 fifth_round_pst = fourth_round_pst # + secret, maybe pirate gold?
 
 SYMBOLS_BY_ROUND_POSITIONABLE = {
+    0: first_round_pst,
     1: first_round_pst,
     2: snd_round_pst,
     3: third_round_pst,
