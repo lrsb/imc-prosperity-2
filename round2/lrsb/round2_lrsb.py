@@ -303,14 +303,29 @@ class OrchidsTrader(BaseTrader):
         self.logger.print('south island quotes', south_bid, south_ask)
 
         conversions = -state.position.get(product, 0)
-        sold_position = state.position.get(product, 0) + conversions
-
+        sold_position = 0
         orders = []
 
-        # Market is highly correlated with environment conditions, if sunlight is low and humidity out of interval, bots are willing to trade at higher price
+        # TODO Implement arbitrage in the other direction, maybe
+
+        # Market is highly correlated with environment conditions, if sunlight is low and humidity out of interval,
+        # bots are willing to trade at reservation price. Sunlight might not be taken into account as we are trading on
+        # a single day, but instead humidity has an immediate effect
+
         true_ask = math.ceil(south_ask)
-        if conversion_observation.sunlight >= 1800 or 60 <= conversion_observation.humidity <= 80: true_ask += 1
+        if 60 <= round(conversion_observation.humidity) <= 80: true_ask += 1
         else: true_ask += 2
+
+        '''
+        if conversion_observation.sunlight >= 1800: trader_data.pop('sunlight_timestamp', None)
+        elif 'sunlight_timestamp' not in trader_data: trader_data['sunlight_timestamp'] = state.timestamp
+
+        pct_change = 0
+        if conversion_observation.sunlight < 1800: pct_change += (state.timestamp - trader_data['sunlight_timestamp']) / (1_000_000 / (12 * 6)) * 0.04
+        if conversion_observation.humidity > 80: pct_change += (conversion_observation.humidity - 80) / 5 * 0.04
+        if conversion_observation.humidity < 60: pct_change += (60 - conversion_observation.humidity) / 5 * 0.04
+        true_ask = round(south_ask * (1 + pct_change))
+        '''
 
         for price, qty in bid_book:
             arbitrage_profit = price - true_ask
