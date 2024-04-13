@@ -133,6 +133,8 @@ class AmethistsStarfruitTrader(BaseTrader):
 
         # Create orders
         for product in ['STARFRUIT', 'AMETHYSTS']:
+            self.logger.print(product)
+
             # Save volume
             if product in state.own_trades:
                 trader_data['volume'][product] += sum([trade.quantity for trade in state.own_trades[product] if trade.timestamp == state.timestamp - 100])
@@ -265,20 +267,18 @@ class AmethistsStarfruitTrader(BaseTrader):
 
 '''TRADER FOR ORCHIDS'''
 class OrchidsTrader(BaseTrader):
-    DEFAULT_TRADER_DATA = {'conversions': int, 'volume': int, 'island_inventory': int, 'exposure': float, 'ref_price': float}
+    DEFAULT_TRADER_DATA = {'volume': int, 'exposure': float, 'ref_price': float}
 
     def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
         result = {}
         conversions = 0
 
         for product in ['ORCHIDS']:
+            self.logger.print(product)
+
             # Save volume
             if product in state.own_trades:
                 trader_data['volume'][product] += sum([trade.quantity for trade in state.own_trades[product] if trade.timestamp == state.timestamp - 100])
-
-            # Save island inventory
-            if product in state.market_trades:
-                trader_data['island_inventory'][product] += sum([trade.quantity for trade in state.market_trades[product] if trade.timestamp == state.timestamp - 100])
 
             # Log exposure gain/loss
             conversion_observation = state.observations.conversionObservations[product]
@@ -292,49 +292,38 @@ class OrchidsTrader(BaseTrader):
             product_orders, product_conversions = self.compute_orders_conversions(product, state, conversion_observation)
             result[product] = product_orders
             conversions += product_conversions
-            trader_data['conversions'][product] +=product_conversions
 
         return result, conversions
 
     def compute_orders_conversions(self, product: str, state: TradingState, conversion_observation: ConversionObservation) -> tuple[List[Order], int]:
         bid_book = list(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
-        best_ask = min(state.order_depths[product].sell_orders.keys())
-        best_bid = max(state.order_depths[product].buy_orders.keys())
 
         south_ask = conversion_observation.askPrice + conversion_observation.importTariff + conversion_observation.transportFees
         south_bid = conversion_observation.bidPrice - conversion_observation.exportTariff - conversion_observation.transportFees
         self.logger.print('south island quotes', south_bid, south_ask)
 
-        sold_position = state.position.get(product, 0)
+        conversions = -state.position.get(product, 0)
+        sold_position = state.position.get(product, 0) + conversions
 
         orders = []
-        conversions = 0
+
+        # Market is highly correlated with environment conditions, if sunlight is low and humidity out of interval, bots are willing to trade at higher price
+        true_ask = math.ceil(south_ask)
+        if conversion_observation.sunlight >= 1800 or 60 <= conversion_observation.humidity <= 80: true_ask += 1
+        else: true_ask += 2
 
         for price, qty in bid_book:
-            arbitrage_profit = price - south_ask
-            if arbitrage_profit > 0 and sold_position <= 0:
-                self.logger.print('conversion (price, qty, profit):', price, qty, arbitrage_profit * qty)
-                conversions += qty
-                sold_position += qty
-        if product in state.own_trades:
-            trades_to_convert = sum([trade.quantity for trade in state.own_trades[product] if trade.timestamp == state.timestamp - 100 and trade.price > south_ask])
-            conversions += trades_to_convert
-            sold_position += trades_to_convert
+            arbitrage_profit = price - true_ask
+            executed_sell = min(sold_position + POSITION_LIMIT[product], qty)
 
-        for price, qty in bid_book:
-            # Find a way to manage conversions and inventory
-            #target_inventory = -10
-
-            executed_sell = min(sold_position + POSITION_LIMIT[product] - 60, qty)
-            immediate_trade_loss = best_bid - price
-
-            # Use also volume
-            if executed_sell > 0 and immediate_trade_loss < 5:
+            # Change arbitrage_profit value
+            if arbitrage_profit > 0 and executed_sell > 0:
+                self.logger.print('arbitrage opportunity (price, qty, profit):', price, executed_sell, arbitrage_profit * executed_sell)
                 orders.append(Order(product, price, -executed_sell))
                 sold_position -= executed_sell
 
-        # Liquidity here is very correlated with market conditions, if sunlight is low or humidity out of interval, bots are willing to trade more
-        orders.append(Order(product, math.ceil(south_ask + 2), -POSITION_LIMIT[product] - sold_position))
+        orders.append(Order(product, true_ask, -POSITION_LIMIT[product] - sold_position))
+        self.logger.print('market making (price, qty)', true_ask, -POSITION_LIMIT[product] - sold_position)
 
         return orders, conversions
 
