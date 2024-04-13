@@ -309,29 +309,14 @@ class OrchidsTrader(BaseTrader):
         conversions = -state.position.get(product, 0)
         orders = []
 
-        # Market is highly correlated with environment conditions, if sunlight is low and humidity out of interval,
-        # bots are willing to trade at an higher reservation price. Sunlight might not be taken into account as we are
-        # trading on a single day, but instead humidity has an immediate effect
+        # The bots reservation price is always at -2, -4, -5 from south island ask price. I tried to catch the
+        # liquidity at -4 and -5, but it didn't increase the pnl
 
-        # TODO find reservation price distribution
-
-        if 60 <= round(conversion_observation.humidity) <= 80: quote_spread = 1
-        else: quote_spread = 2
-
-        '''
-        if conversion_observation.sunlight >= 1800: trader_data.pop('sunlight_timestamp', None)
-        elif 'sunlight_timestamp' not in trader_data: trader_data['sunlight_timestamp'] = state.timestamp
-
-        pct_change = 0
-        if conversion_observation.sunlight < 1800: pct_change += (state.timestamp - trader_data['sunlight_timestamp']) / (1_000_000 / (12 * 6)) * 0.04
-        if conversion_observation.humidity > 80: pct_change += (conversion_observation.humidity - 80) / 5 * 0.04
-        if conversion_observation.humidity < 60: pct_change += (60 - conversion_observation.humidity) / 5 * 0.04
-        true_ask = round(south_ask * (1 + pct_change))
-        '''
+        # TODO find a way to catch such liquidity
 
         if midprice > (south_ask + south_bid) / 2:
             sold_position = 0
-            true_ask = math.ceil(south_ask) + quote_spread
+            true_ask = math.floor(conversion_observation.askPrice) - 2
 
             for price, qty in bid_book:
                 arbitrage_profit = price - true_ask
@@ -342,15 +327,12 @@ class OrchidsTrader(BaseTrader):
                     orders.append(Order(product, price, -executed_sell))
                     sold_position -= executed_sell
 
-            best_bid = max(state.order_depths[product].buy_orders.keys())
-            mm_ask = best_bid + 2 if true_ask - best_bid > 3 else true_ask
-
-            orders.append(Order(product, mm_ask, -POSITION_LIMIT[product] - sold_position))
-            self.logger.print('market making (price, qty)', mm_ask, -POSITION_LIMIT[product] - sold_position)
+            orders.append(Order(product, true_ask, -POSITION_LIMIT[product] - sold_position))
+            self.logger.print('market making (price, qty)', true_ask, -POSITION_LIMIT[product] - sold_position)
 
         else:
             bought_position = 0
-            true_bid = math.floor(south_bid) - quote_spread
+            true_bid = math.ceil(conversion_observation.bidPrice) + 2
 
             for price, qty in ask_book:
                 arbitrage_profit = true_bid - price
@@ -361,11 +343,8 @@ class OrchidsTrader(BaseTrader):
                     orders.append(Order(product, price, executed_buy))
                     bought_position += executed_buy
 
-            best_ask = min(state.order_depths[product].sell_orders.keys())
-            mm_bid = best_ask - 2 if best_ask - true_bid > 3 else true_bid
-
-            orders.append(Order(product, mm_bid, POSITION_LIMIT[product] - bought_position))
-            self.logger.print('market making (price, qty)', mm_bid, POSITION_LIMIT[product] - bought_position)
+            orders.append(Order(product, true_bid, POSITION_LIMIT[product] - bought_position))
+            self.logger.print('market making (price, qty)', true_bid, POSITION_LIMIT[product] - bought_position)
 
         return orders, conversions
 
