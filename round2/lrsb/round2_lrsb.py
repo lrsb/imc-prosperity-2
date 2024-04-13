@@ -310,16 +310,15 @@ class OrchidsTrader(BaseTrader):
         orders = []
 
         # The bots reservation price is always at -2, -4, -5 from south island ask price. I tried to catch the
-        # liquidity at -4 and -5, but it didn't increase the pnl
-
-        # TODO find a way to catch such liquidity
+        # liquidity at -4 and -5, but it didn't increase the pnl. It might be related to other trades.
 
         if midprice > (south_ask + south_bid) / 2:
             sold_position = 0
-            true_ask = math.floor(conversion_observation.askPrice) - 2
+            reservation_bid = math.floor(conversion_observation.askPrice) - 2
 
+            # Could be useless
             for price, qty in bid_book:
-                arbitrage_profit = price - true_ask
+                arbitrage_profit = price - reservation_bid
                 executed_sell = min(sold_position + POSITION_LIMIT[product], qty)
 
                 if arbitrage_profit > 0 and executed_sell > 0:
@@ -327,15 +326,15 @@ class OrchidsTrader(BaseTrader):
                     orders.append(Order(product, price, -executed_sell))
                     sold_position -= executed_sell
 
-            orders.append(Order(product, true_ask, -POSITION_LIMIT[product] - sold_position))
-            self.logger.print('market making (price, qty)', true_ask, -POSITION_LIMIT[product] - sold_position)
+            orders.append(Order(product, reservation_bid, -POSITION_LIMIT[product] - sold_position))
+            self.logger.print('market making (price, qty)', reservation_bid, -POSITION_LIMIT[product] - sold_position)
 
         else:
             bought_position = 0
-            true_bid = math.ceil(conversion_observation.bidPrice) + 2
+            reservation_ask = math.ceil(conversion_observation.bidPrice) + 2
 
             for price, qty in ask_book:
-                arbitrage_profit = true_bid - price
+                arbitrage_profit = reservation_ask - price
                 executed_buy = min(POSITION_LIMIT[product] - bought_position, -qty)
 
                 if arbitrage_profit > 0 and executed_buy > 0:
@@ -343,8 +342,8 @@ class OrchidsTrader(BaseTrader):
                     orders.append(Order(product, price, executed_buy))
                     bought_position += executed_buy
 
-            orders.append(Order(product, true_bid, POSITION_LIMIT[product] - bought_position))
-            self.logger.print('market making (price, qty)', true_bid, POSITION_LIMIT[product] - bought_position)
+            orders.append(Order(product, reservation_ask, POSITION_LIMIT[product] - bought_position))
+            self.logger.print('market making (price, qty)', reservation_ask, POSITION_LIMIT[product] - bought_position)
 
         return orders, conversions
 
