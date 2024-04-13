@@ -133,6 +133,7 @@ class AmethistsStarfruitTrader(BaseTrader):
 
         # Create orders
         for product in ['STARFRUIT', 'AMETHYSTS']:
+            if product not in state.listings.keys(): continue
             self.logger.print(product)
 
             # Save volume
@@ -274,6 +275,7 @@ class OrchidsTrader(BaseTrader):
         conversions = 0
 
         for product in ['ORCHIDS']:
+            if product not in state.listings.keys(): continue
             self.logger.print(product)
 
             # Save volume
@@ -296,25 +298,25 @@ class OrchidsTrader(BaseTrader):
         return result, conversions
 
     def compute_orders_conversions(self, product: str, state: TradingState, conversion_observation: ConversionObservation) -> tuple[List[Order], int]:
+        ask_book = list(sorted(state.order_depths[product].sell_orders.items()))
         bid_book = list(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
+        midprice = (max(state.order_depths[product].sell_orders.keys()) + min(state.order_depths[product].buy_orders.keys())) / 2
 
         south_ask = conversion_observation.askPrice + conversion_observation.importTariff + conversion_observation.transportFees
         south_bid = conversion_observation.bidPrice - conversion_observation.exportTariff - conversion_observation.transportFees
         self.logger.print('south island quotes', south_bid, south_ask)
 
         conversions = -state.position.get(product, 0)
-        sold_position = 0
         orders = []
 
-        # TODO Implement arbitrage in the other direction, maybe
-
         # Market is highly correlated with environment conditions, if sunlight is low and humidity out of interval,
-        # bots are willing to trade at reservation price. Sunlight might not be taken into account as we are trading on
-        # a single day, but instead humidity has an immediate effect
+        # bots are willing to trade at an higher reservation price. Sunlight might not be taken into account as we are
+        # trading on a single day, but instead humidity has an immediate effect
 
-        true_ask = math.ceil(south_ask)
-        if 60 <= round(conversion_observation.humidity) <= 80: true_ask += 1
-        else: true_ask += 2
+        # TODO find reservation price distribution
+
+        if 60 <= round(conversion_observation.humidity) <= 80: quote_spread = 1
+        else: quote_spread = 2
 
         '''
         if conversion_observation.sunlight >= 1800: trader_data.pop('sunlight_timestamp', None)
@@ -327,27 +329,52 @@ class OrchidsTrader(BaseTrader):
         true_ask = round(south_ask * (1 + pct_change))
         '''
 
-        for price, qty in bid_book:
-            arbitrage_profit = price - true_ask
-            executed_sell = min(sold_position + POSITION_LIMIT[product], qty)
+        if midprice > (south_ask + south_bid) / 2:
+            sold_position = 0
+            true_ask = math.ceil(south_ask) + quote_spread
 
-            # Change arbitrage_profit value
-            if arbitrage_profit > 0 and executed_sell > 0:
-                self.logger.print('arbitrage opportunity (price, qty, profit):', price, executed_sell, arbitrage_profit * executed_sell)
-                orders.append(Order(product, price, -executed_sell))
-                sold_position -= executed_sell
+            for price, qty in bid_book:
+                arbitrage_profit = price - true_ask
+                executed_sell = min(sold_position + POSITION_LIMIT[product], qty)
 
-        orders.append(Order(product, true_ask, -POSITION_LIMIT[product] - sold_position))
-        self.logger.print('market making (price, qty)', true_ask, -POSITION_LIMIT[product] - sold_position)
+                if arbitrage_profit > 0 and executed_sell > 0:
+                    self.logger.print('arbitrage opportunity (price, qty, profit):', price, executed_sell, arbitrage_profit * executed_sell)
+                    orders.append(Order(product, price, -executed_sell))
+                    sold_position -= executed_sell
+
+            best_bid = max(state.order_depths[product].buy_orders.keys())
+            mm_ask = best_bid + 2 if true_ask - best_bid > 3 else true_ask
+
+            orders.append(Order(product, mm_ask, -POSITION_LIMIT[product] - sold_position))
+            self.logger.print('market making (price, qty)', mm_ask, -POSITION_LIMIT[product] - sold_position)
+
+        else:
+            bought_position = 0
+            true_bid = math.floor(south_bid) - quote_spread
+
+            for price, qty in ask_book:
+                arbitrage_profit = true_bid - price
+                executed_buy = min(POSITION_LIMIT[product] - bought_position, -qty)
+
+                if arbitrage_profit > 0 and executed_buy > 0:
+                    self.logger.print('arbitrage opportunity (price, qty, profit):', price, executed_buy, arbitrage_profit * executed_buy)
+                    orders.append(Order(product, price, executed_buy))
+                    bought_position += executed_buy
+
+            best_ask = min(state.order_depths[product].sell_orders.keys())
+            mm_bid = best_ask - 2 if best_ask - true_bid > 3 else true_bid
+
+            orders.append(Order(product, mm_bid, POSITION_LIMIT[product] - bought_position))
+            self.logger.print('market making (price, qty)', mm_bid, POSITION_LIMIT[product] - bought_position)
 
         return orders, conversions
 
 
 class Trader:
     logger = Logger(local=False)
-    #TRADERS = [AmethistsStarfruitTrader(), OrchidsTrader()]
+    TRADERS = [AmethistsStarfruitTrader(), OrchidsTrader()]
     #TRADERS = [AmethistsStarfruitTrader()]
-    TRADERS = [OrchidsTrader()]
+    #TRADERS = [OrchidsTrader()]
 
     def local(self):
         self.logger = Logger(local=True)
