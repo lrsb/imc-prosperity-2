@@ -175,7 +175,7 @@ class AmethistsStarfruitTrader(BaseTrader):
                 case 'AMETHYSTS':
                     return min(20, round(x * 10))
                 case 'STARFRUIT':
-                    return min(20, round(x * 8))
+                    return min(20, round(x * 10))
 
         # Maximum negative exposure that we want to have if the profit is x
         def sell_schedule(x: float) -> int:
@@ -183,7 +183,7 @@ class AmethistsStarfruitTrader(BaseTrader):
                 case 'AMETHYSTS':
                     return max(-20, round(-x * 10))
                 case 'STARFRUIT':
-                    return max(-20, round(-x * 8))
+                    return max(-20, round(-x * 10))
 
         # Extract the relevant info from the trading_state
         sold_position = state.position.get(product, 0)
@@ -246,8 +246,9 @@ class AmethistsStarfruitTrader(BaseTrader):
                 bought_position += placed_buy
 
         if POSITION_LIMIT[product] > bought_position:
-            self.logger.print('Incomplete buy book', [res for res in result if res.quantity > 0])
-            result.append(Order(product, price if price is not None else math.floor(ref_price - 1), POSITION_LIMIT[product] - bought_position))
+            quote = price + UNDERCUT_SPREAD[product] if price is not None else math.floor(ref_price) - UNDERCUT_SPREAD[product]
+            self.logger.print('Incomplete buy book', [res for res in result if res.quantity > 0], quote)
+            result.append(Order(product, quote, POSITION_LIMIT[product] - bought_position))
 
         price = None
         for price, qty in ask_book:
@@ -260,8 +261,9 @@ class AmethistsStarfruitTrader(BaseTrader):
                 sold_position -= placed_sell
 
         if POSITION_LIMIT[product] > -sold_position:
-            self.logger.print('Incomplete sell book', [res for res in result if res.quantity < 0])
-            result.append(Order(product, price if price is not None else math.ceil(ref_price + 1), -POSITION_LIMIT[product] - sold_position))
+            quote = price - UNDERCUT_SPREAD[product] if price is not None else math.ceil(ref_price) + UNDERCUT_SPREAD[product]
+            self.logger.print('Incomplete sell book', [res for res in result if res.quantity < 0], quote)
+            result.append(Order(product, quote, -POSITION_LIMIT[product] - sold_position))
 
         return result
 
@@ -312,16 +314,17 @@ class OrchidsTrader(BaseTrader):
         # The bots reservation price is always at -2, -4, -5 from south island ask price. I tried to catch the
         # liquidity at -4 and -5, but it didn't increase the pnl. It might be related to other trades.
 
-        if midprice > (south_ask + south_bid) / 2:
+        if midprice >= (south_ask + south_bid) / 2:
             sold_position = 0
-            reservation_bid = math.floor(conversion_observation.askPrice) - 2
+            reservation_bid = max(math.floor(south_ask) + 2, math.floor(conversion_observation.askPrice) - 2)
 
             # Could be useless
             for price, qty in bid_book:
-                arbitrage_profit = price - reservation_bid
+                arbitrage_profit = price - south_ask
+                reservation_bid_profit = price - reservation_bid
                 executed_sell = min(sold_position + POSITION_LIMIT[product], qty)
 
-                if arbitrage_profit > 0 and executed_sell > 0:
+                if (arbitrage_profit > 4 or reservation_bid_profit > 0) and executed_sell > 0:
                     self.logger.print('arbitrage opportunity (price, qty, profit):', price, executed_sell, arbitrage_profit * executed_sell)
                     orders.append(Order(product, price, -executed_sell))
                     sold_position -= executed_sell
@@ -331,13 +334,15 @@ class OrchidsTrader(BaseTrader):
 
         else:
             bought_position = 0
-            reservation_ask = math.ceil(conversion_observation.bidPrice) + 2
+            reservation_ask = min(math.ceil(south_bid) - 2, math.ceil(conversion_observation.bidPrice) + 2)
 
+            # Could be useless
             for price, qty in ask_book:
-                arbitrage_profit = reservation_ask - price
+                arbitrage_profit = south_bid - price
+                reservation_ask_profit = reservation_ask - price
                 executed_buy = min(POSITION_LIMIT[product] - bought_position, -qty)
 
-                if arbitrage_profit > 0 and executed_buy > 0:
+                if (arbitrage_profit > 4 or reservation_ask_profit > 0) and executed_buy > 0:
                     self.logger.print('arbitrage opportunity (price, qty, profit):', price, executed_buy, arbitrage_profit * executed_buy)
                     orders.append(Order(product, price, executed_buy))
                     bought_position += executed_buy
@@ -369,6 +374,12 @@ class Trader:
 
             result |= trader_result
             conversions += trader_conversions
+
+        # Converting orders to int
+        for product, orders in result.items():
+            for order in orders:
+                order.price = round(order.price)
+                order.quantity = round(order.quantity)
 
         # Save trader data (pretty print for visualizer) and logs
         trader_data_json = json.dumps(trader_data, indent=2)
