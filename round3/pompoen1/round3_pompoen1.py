@@ -6,7 +6,7 @@ from typing import *
 from datamodel import *
 
 POSITION_LIMIT = {'AMETHYSTS': 20, 'STARFRUIT': 20, 'ORCHIDS': 100, 'CHOCOLATE': 250, 'STRAWBERRIES': 350, 'ROSES': 60, 'GIFT_BASKET': 60}
-UNDERCUT_SPREAD = {'AMETHYSTS': 1, 'STARFRUIT': 1}
+UNDERCUT_SPREAD = {'AMETHYSTS': 1, 'STARFRUIT': 1, 'GIFT_BASKET': 4}
 
 
 class Logger:
@@ -361,6 +361,109 @@ class OrchidsTrader(BaseTrader):
 
         return orders, conversions
 
+# This one does hits stale orders in the markets
+class GiftBasketTrader2(BaseTrader):
+    DEFAULT_TRADER_DATA = {'ref_price': float, 'volume': int, 'inventory_loss': float, 'exposure': float}
+
+    def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
+        result = {}
+        conversions = 0
+
+        # Create orders
+        for product in ['GIFT_BASKET']:
+            if product not in state.listings.keys(): continue
+            self.logger.print(product)
+
+            # Save volume
+            if product in state.own_trades:
+                trader_data['volume'][product] += sum([trade.quantity for trade in state.own_trades[product] if trade.timestamp == state.timestamp - 100])
+
+            # Compute reference price
+            ref_price = self.compute_product_price(product, state, trader_data)
+
+            # Log exposure gain/loss
+            if product in trader_data['ref_price']:
+                trader_data['exposure'][product] += (ref_price - trader_data['ref_price'][product]) * state.position.get(product, 0)
+            trader_data['ref_price'][product] = ref_price
+
+            # Compute orders
+            if ref_price is None: continue
+            result[product] = self.compute_orders(product, ref_price, state, trader_data)
+
+        return result, conversions
+
+    def compute_product_price(self, product: str, state: TradingState, trader_data: dict) -> float:
+        match product:
+            case 'GIFT_BASKET':
+                bid_book = list(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
+                ask_book = list(sorted(state.order_depths[product].sell_orders.items()))
+                if not bid_book or not ask_book:
+                    self.logger.print('EMPTY BOOK!!!')
+                    return trader_data['ref_price'][product] if product in trader_data['ref_price'] else None
+
+                return (ask_book[-1][0] + bid_book[-1][0]) / 2
+
+    def compute_orders(self, product: str, ref_price: float, state: TradingState, trader_data: dict) -> List[Order]:
+        # Maximum positive exposure that we want to have if the profit is x
+        def buy_schedule(x: float) -> int:
+            match product:
+                case 'GIFT_BASKET':
+                    return min(60, round(x * 10))
+
+        # Maximum negative exposure that we want to have if the profit is x
+        def sell_schedule(x: float) -> int:
+            match product:
+                case 'GIFT_BASKET':
+                    return max(-60, round(-x * 10))
+
+        # Extract the relevant info from the trading_state
+        sold_position = state.position.get(product, 0)
+        bought_position = state.position.get(product, 0)
+
+        bid_book = list(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
+        ask_book = list(sorted(state.order_depths[product].sell_orders.items()))
+
+        # Placeholder for the emitted orders
+        result = []
+
+        # Removing stale orders
+        n_ask_book = []
+        for price, qty in ask_book:
+            curr_profit = ref_price - price
+            # we never take -EV trade, and the max positive exposure that we want to
+            # hold depends on the buy_schedule
+            executed_buy = min(buy_schedule(curr_profit) - bought_position, -qty)
+            if curr_profit >= 0 and executed_buy > 0:
+                result.append(Order(product, price, executed_buy))
+                bought_position += executed_buy
+                if executed_buy != -qty:
+                    n_ask_book.append((price, qty + executed_buy))
+            else:
+                n_ask_book.append((price, qty))
+                if curr_profit > 0:
+                    trader_data['inventory_loss'][product] += abs(curr_profit * qty)
+                    assert trader_data['inventory_loss'][product] >= 0
+
+        ask_book = n_ask_book
+
+        n_bid_book = []
+        for price, qty in bid_book:
+            curr_profit = price - ref_price
+            # we never take -EV trade, and the max negative exposure that we want to
+            # hold depends on the sell_schedule
+            executed_sell = min(sold_position - sell_schedule(curr_profit), qty)
+            if curr_profit >= 0 and executed_sell > 0:
+                result.append(Order(product, price, -executed_sell))
+                sold_position -= executed_sell
+                if executed_sell != qty:
+                    n_bid_book.append((price, qty - executed_sell))
+            else:
+                n_bid_book.append((price, qty))
+                if curr_profit > 0:
+                    trader_data['inventory_loss'][product] += abs(curr_profit * qty)
+                    assert trader_data['inventory_loss'][product] >= 0
+
+        return result
 
 '''TRADER FOR THE GIFT BASKET'''
 class GiftBasketTrader(BaseTrader):
@@ -444,17 +547,13 @@ class GiftBasketTrader(BaseTrader):
 
         basket_std = 75
         trade_at = basket_std * 0.5
-        trade_at2 = basket_std * 1
 
         pb_pos = state.position.get('GIFT_BASKET', 0)
         pb_neg = state.position.get('GIFT_BASKET', 0)
 
         # Sell basket if basket overpriced
         if res_quote > trade_at:
-            if res_quote > trade_at2:
-                vol_max_basket = state.position.get('GIFT_BASKET', 0) + POSITION_LIMIT['GIFT_BASKET']
-            else:
-                vol_max_basket = state.position.get('GIFT_BASKET', 0) + POSITION_LIMIT['GIFT_BASKET'] + 20
+            vol_max_basket = state.position.get('GIFT_BASKET', 0) + POSITION_LIMIT['GIFT_BASKET']
             # vol_max_chocolate = POSITION_LIMIT['CHOCOLATE'] - state.position.get('CHOCOLATE', 0)
             # vol_max_strawberries = POSITION_LIMIT['STRAWBERRIES'] - state.position.get('STRAWBERRIES', 0)
             # vol_max_roses = POSITION_LIMIT['ROSES'] - state.position.get('ROSES', 0)
@@ -468,10 +567,7 @@ class GiftBasketTrader(BaseTrader):
                 
         # Buy basket if basket underpriced
         elif res_quote < -trade_at:
-            if res_quote > trade_at2:
-                vol_max_basket = POSITION_LIMIT['GIFT_BASKET'] - state.position.get('GIFT_BASKET', 0)
-            else:
-                vol_max_basket = POSITION_LIMIT['GIFT_BASKET'] - state.position.get('GIFT_BASKET', 0) - 20
+            vol_max_basket = POSITION_LIMIT['GIFT_BASKET'] - state.position.get('GIFT_BASKET', 0)
             # vol_max_chocolate = state.position.get('CHOCOLATE', 0) + POSITION_LIMIT['CHOCOLATE']
             # vol_max_strawberries = state.position.get('STRAWBERRIES', 0) + POSITION_LIMIT['STRAWBERRIES']
             # vol_max_roses = state.position.get('ROSES', 0) + POSITION_LIMIT['ROSES']
@@ -544,7 +640,7 @@ class GiftBasketTrader(BaseTrader):
 
 class Trader:
     logger = Logger()
-    TRADERS = [AmethistsStarfruitTrader(), OrchidsTrader(), GiftBasketTrader()]
+    TRADERS = [AmethistsStarfruitTrader(), OrchidsTrader(), GiftBasketTrader2(), GiftBasketTrader()]
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         # Load or create trader data
