@@ -1,0 +1,210 @@
+{
+  "treasureIslandTiles": [
+    {
+      "coordinates": {
+        "x": 26,
+        "y": 4
+      },
+      "multiplier": 77,
+      "hunters": 5
+    },
+    {
+      "coordinates": {
+        "x": 27,
+        "y": 4
+      },
+      "multiplier": 83,
+      "hunters": 5
+    },
+    {
+      "coordinates": {
+        "x": 26,
+        "y": 2
+      },
+      "multiplier": 47,
+      "hunters": 3
+    },
+    {
+      "coordinates": {
+        "x": 28,
+        "y": 4
+      },
+      "multiplier": 85,
+      "hunters": 5
+    },
+    {
+      "coordinates": {
+        "x": 27,
+        "y": 2
+      },
+      "multiplier": 82,
+      "hunters": 5
+    },
+    {
+      "coordinates": {
+        "x": 29,
+        "y": 4
+      },
+      "multiplier": 79,
+      "hunters": 5
+    },
+    {
+      "coordinates": {
+        "x": 28,
+        "y": 2
+      },
+      "multiplier": 87,
+      "hunters": 5
+    },
+    {
+      "coordinates": {
+        "x": 30,
+        "y": 4
+      },
+      "multiplier": 55,
+      "hunters": 4
+    },
+    {
+      "coordinates": {
+        "x": 29,
+        "y": 2
+      },
+      "multiplier": 80,
+      "hunters": 5
+    },
+    {
+      "coordinates": {
+        "x": 30,
+        "y": 2
+      },
+      "multiplier": 35,
+      "hunters": 3
+    },
+    {
+      "coordinates": {
+        "x": 26,
+        "y": 5
+      },
+      "multiplier": 12,
+      "hunters": 2
+    },
+    {
+      "coordinates": {
+        "x": 27,
+        "y": 5
+      },
+      "multiplier": 27,
+      "hunters": 3
+    },
+    {
+      "coordinates": {
+        "x": 26,
+        "y": 3
+      },
+      "multiplier": 73,
+      "hunters": 4
+    },
+    {
+      "coordinates": {
+        "x": 28,
+        "y": 5
+      },
+      "multiplier": 52,
+      "hunters": 4
+    },
+    {
+      "coordinates": {
+        "x": 27,
+        "y": 3
+      },
+      "multiplier": 89,
+      "hunters": 5
+    },
+    {
+      "coordinates": {
+        "x": 29,
+        "y": 5
+      },
+      "multiplier": 15,
+      "hunters": 2
+    },
+    {
+      "coordinates": {
+        "x": 26,
+        "y": 1
+      },
+      "multiplier": 24,
+      "hunters": 2
+    },
+    {
+      "coordinates": {
+        "x": 28,
+        "y": 3
+      },
+      "multiplier": 100,
+      "hunters": 8
+    },
+    {
+      "coordinates": {
+        "x": 30,
+        "y": 5
+      },
+      "multiplier": 30,
+      "hunters": 3
+    },
+    {
+      "coordinates": {
+        "x": 27,
+        "y": 1
+      },
+      "multiplier": 70,
+      "hunters": 4
+    },
+    {
+      "coordinates": {
+        "x": 29,
+        "y": 3
+      },
+      "multiplier": 90,
+      "hunters": 7
+    },
+    {
+      "coordinates": {
+        "x": 28,
+        "y": 1
+      },
+      "multiplier": 41,
+      "hunters": 3
+    },
+    {
+      "coordinates": {
+        "x": 30,
+        "y": 3
+      },
+      "multiplier": 17,
+      "hunters": 2
+    },
+    {
+      "coordinates": {
+        "x": 29,
+        "y": 1
+      },
+      "multiplier": 21,
+      "hunters": 2
+    },
+    {
+      "coordinates": {
+        "x": 30,
+        "y": 1
+      },
+      "multiplier": 60,
+      "hunters": 4
+    }
+  ],
+  "treasureIslandBaseValue": 7500,
+  "treasureIslandExpeditionCosts": {
+    "1": 0,
+    "2": 25000,
+    "3": 75000
+  }
+}
