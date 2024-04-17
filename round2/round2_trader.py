@@ -1,48 +1,48 @@
-import math
-import statistics as stat
-from collections import *
-from typing import *
-
 from datamodel import *
+from typing import *
+from collections import *
+import statistics as stat
+import numpy as np
+import pandas as pd
+import json
+import math
+import copy
+import jsonpickle
 
-POSITION_LIMIT = {'AMETHYSTS': 20, 'STARFRUIT': 20, 'ORCHIDS': 100, 'CHOCOLATE': 250, 'STRAWBERRIES': 350, 'ROSES': 60, 'GIFT_BASKET': 60}
+POSITION_LIMIT = {'AMETHYSTS': 20, 'STARFRUIT': 20, 'ORCHIDS': 100}
 UNDERCUT_SPREAD = {'AMETHYSTS': 1, 'STARFRUIT': 1}
 
-
 class Logger:
-    def __init__(self) -> None:
+    local: bool
+    local_logs: dict[int, str] = {}
+
+    def __init__(self, local=False) -> None:
         self.logs = ""
-        self.max_log_length = 3750
+        self.local = local
 
     def print(self, *objects: Any, sep: str = " ", end: str = "\n") -> None:
         self.logs += sep.join(map(str, objects)) + end
 
     def flush(self, state: TradingState, orders: dict[Symbol, list[Order]], conversions: int, trader_data: str) -> None:
-        base_length = len(self.to_json([
-            self.compress_state(state, ""),
+        output = json.dumps([
+            self.compress_state(state),
             self.compress_orders(orders),
             conversions,
-            "",
-            "",
-        ]))
+            trader_data,
+            self.logs,
+        ], cls=ProsperityEncoder, separators=(",", ":"))
 
-        # We truncate state.traderData, trader_data, and self.logs to the same max. length to fit the log limit
-        max_item_length = (self.max_log_length - base_length) // 3
-
-        print(self.to_json([
-            self.compress_state(state, self.truncate(state.traderData, max_item_length)),
-            self.compress_orders(orders),
-            conversions,
-            self.truncate(trader_data, max_item_length),
-            self.truncate(self.logs, max_item_length),
-        ]))
+        if self.local:
+            self.local_logs[state.timestamp] = output
+        else:
+            print(output)
 
         self.logs = ""
 
-    def compress_state(self, state: TradingState, trader_data: str) -> list[Any]:
+    def compress_state(self, state: TradingState) -> list[Any]:
         return [
             state.timestamp,
-            trader_data,
+            state.traderData,
             self.compress_listings(state.listings),
             self.compress_order_depths(state.order_depths),
             self.compress_trades(state.own_trades),
@@ -103,20 +103,10 @@ class Logger:
 
         return compressed
 
-    def to_json(self, value: Any) -> str:
-        return json.dumps(value, cls=ProsperityEncoder, separators=(",", ":"))
-
-    def truncate(self, value: str, max_length: int) -> str:
-        if len(value) <= max_length:
-            return value
-
-        return value[:max_length - 3] + "..."
-
 
 '''TRADER BASE CLASS'''
 class BaseTrader:
-    BASE_TRADER_DATA = {'volume': int}
-    TRADER_DATA = {}
+    DEFAULT_TRADER_DATA = {}
     logger = None
 
     def with_logger(self, logger: Logger):
@@ -124,11 +114,8 @@ class BaseTrader:
         return self
 
     def run(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
-        for k, v in self.BASE_TRADER_DATA.items() | self.TRADER_DATA.items():
+        for k, v in self.DEFAULT_TRADER_DATA.items():
             trader_data[k] = defaultdict(v, trader_data[k]) if k in trader_data else defaultdict(v)
-
-        for product, trades in state.own_trades.items():
-            trader_data['volume'][product] += sum([trade.quantity for trade in trades if trade.timestamp == state.timestamp - 100])
 
         return self.algo(state, trader_data)
 
@@ -138,7 +125,7 @@ class BaseTrader:
 
 '''TRADER FOR STARFRUIT AND AMETHYSTS'''
 class AmethistsStarfruitTrader(BaseTrader):
-    TRADER_DATA = {'ref_price': float, 'inventory_loss': float, 'exposure': float}
+    DEFAULT_TRADER_DATA = {'ref_price': float, 'volume': int, 'inventory_loss': float, 'exposure': float}
 
     def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
         result = {}
@@ -148,6 +135,10 @@ class AmethistsStarfruitTrader(BaseTrader):
         for product in ['STARFRUIT', 'AMETHYSTS']:
             if product not in state.listings.keys(): continue
             self.logger.print(product)
+
+            # Save volume
+            if product in state.own_trades:
+                trader_data['volume'][product] += sum([trade.quantity for trade in state.own_trades[product] if trade.timestamp == state.timestamp - 100])
 
             # Compute reference price
             ref_price = self.compute_product_price(product, state, trader_data)
@@ -279,7 +270,7 @@ class AmethistsStarfruitTrader(BaseTrader):
 
 '''TRADER FOR ORCHIDS'''
 class OrchidsTrader(BaseTrader):
-    TRADER_DATA = {'exposure': float, 'ref_price': float}
+    DEFAULT_TRADER_DATA = {'volume': int, 'exposure': float, 'ref_price': float}
 
     def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
         result = {}
@@ -288,6 +279,10 @@ class OrchidsTrader(BaseTrader):
         for product in ['ORCHIDS']:
             if product not in state.listings.keys(): continue
             self.logger.print(product)
+
+            # Save volume
+            if product in state.own_trades:
+                trader_data['volume'][product] += sum([trade.quantity for trade in state.own_trades[product] if trade.timestamp == state.timestamp - 100])
 
             # Log exposure gain/loss
             conversion_observation = state.observations.conversionObservations[product]
@@ -321,7 +316,7 @@ class OrchidsTrader(BaseTrader):
 
         if midprice >= (south_ask + south_bid) / 2:
             sold_position = 0
-            reservation_bid = max(math.ceil(south_ask), math.floor(conversion_observation.askPrice) - 2)
+            reservation_bid = max(math.floor(south_ask) + 2, math.floor(conversion_observation.askPrice) - 2)
 
             # Could be useless
             for price, qty in bid_book:
@@ -339,7 +334,7 @@ class OrchidsTrader(BaseTrader):
 
         else:
             bought_position = 0
-            reservation_ask = min(math.floor(south_bid), math.ceil(conversion_observation.bidPrice) + 2)
+            reservation_ask = min(math.ceil(south_bid) - 2, math.ceil(conversion_observation.bidPrice) + 2)
 
             # Could be useless
             for price, qty in ask_book:
@@ -358,75 +353,14 @@ class OrchidsTrader(BaseTrader):
         return orders, conversions
 
 
-'''TRADER FOR THE GIFT BASKET'''
-class GiftBasketTrader(BaseTrader):
-    TRADER_DATA = {'ref_price': float, 'exposure': float}
-
-    def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
-        books = {}
-        for product in ['GIFT_BASKET', 'CHOCOLATE', 'STRAWBERRIES', 'ROSES']:
-            if product not in state.listings.keys():
-                self.logger.print('Missing product', product)
-                return {}, 0
-
-            # Compute reference price
-            ref_price = self.compute_product_price(product, state, trader_data)
-
-            # Log exposure gain/loss
-            if product in trader_data['ref_price']:
-                trader_data['exposure'][product] += (ref_price - trader_data['ref_price'][product]) * state.position.get(product, 0)
-            trader_data['ref_price'][product] = ref_price
-
-        self.logger.print('GIFT_BASKET')
-        result = self.compute_orders(state, trader_data)
-        conversions = 0
-
-        return result, conversions
-
-    def compute_product_price(self, product: str, state: TradingState, trader_data: dict) -> float:
-        bid_book = list(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
-        ask_book = list(sorted(state.order_depths[product].sell_orders.items()))
-        if not bid_book or not ask_book:
-            self.logger.print('EMPTY BOOK!!!')
-            return trader_data['ref_price'][product] if product in trader_data['ref_price'] else None
-
-        return (ask_book[-1][0] + bid_book[-1][0]) / 2
-
-
-    def compute_orders(self, state: TradingState, trader_data: dict) -> dict[Symbol, list[Order]]:
-        orders = defaultdict(list)
-
-        gift_basket = trader_data['ref_price']['GIFT_BASKET']
-        chocolate = trader_data['ref_price']['CHOCOLATE']
-        strawberries = trader_data['ref_price']['STRAWBERRIES']
-        roses = trader_data['ref_price']['ROSES']
-
-        basket_spread = gift_basket - (chocolate * 4 + strawberries * 6 + roses + 380)
-        self.logger.print('basket_spread', basket_spread)
-
-        basket_std = 76
-        trade_at = basket_std * 0.5
-
-        if basket_spread > trade_at:
-            vol = state.position.get('GIFT_BASKET', 0) + POSITION_LIMIT['GIFT_BASKET']
-            worst_buy = min(state.order_depths['GIFT_BASKET'].buy_orders.keys())
-
-            if vol > 0:
-                orders['GIFT_BASKET'].append(Order('GIFT_BASKET', worst_buy, -vol))
-
-        elif basket_spread < -trade_at:
-            vol = POSITION_LIMIT['GIFT_BASKET'] - state.position.get('GIFT_BASKET', 0)
-            worst_sell = max(state.order_depths['GIFT_BASKET'].sell_orders.keys())
-
-            if vol > 0:
-                orders['GIFT_BASKET'].append(Order('GIFT_BASKET', worst_sell, vol))
-
-        return orders
-
-
 class Trader:
-    logger = Logger()
-    TRADERS = [AmethistsStarfruitTrader(), OrchidsTrader(), GiftBasketTrader()]
+    logger = Logger(local=False)
+    TRADERS = [AmethistsStarfruitTrader(), OrchidsTrader()]
+    #TRADERS = [AmethistsStarfruitTrader()]
+    #TRADERS = [OrchidsTrader()]
+
+    def local(self):
+        self.logger = Logger(local=True)
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         # Load or create trader data
@@ -440,6 +374,12 @@ class Trader:
 
             result |= trader_result
             conversions += trader_conversions
+
+        # Converting orders to int
+        for product, orders in result.items():
+            for order in orders:
+                order.price = round(order.price)
+                order.quantity = round(order.quantity)
 
         # Save trader data (pretty print for visualizer) and logs
         trader_data_json = json.dumps(trader_data, indent=2)

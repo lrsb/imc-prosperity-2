@@ -363,7 +363,6 @@ class GiftBasketTrader(BaseTrader):
     TRADER_DATA = {'ref_price': float, 'exposure': float}
 
     def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
-        books = {}
         for product in ['GIFT_BASKET', 'CHOCOLATE', 'STRAWBERRIES', 'ROSES']:
             if product not in state.listings.keys():
                 self.logger.print('Missing product', product)
