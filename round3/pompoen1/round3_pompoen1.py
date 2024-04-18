@@ -6,7 +6,7 @@ from typing import *
 from datamodel import *
 
 POSITION_LIMIT = {'AMETHYSTS': 20, 'STARFRUIT': 20, 'ORCHIDS': 100, 'CHOCOLATE': 250, 'STRAWBERRIES': 350, 'ROSES': 60, 'GIFT_BASKET': 60}
-UNDERCUT_SPREAD = {'AMETHYSTS': 1, 'STARFRUIT': 1, 'GIFT_BASKET': 4}
+UNDERCUT_SPREAD = {'AMETHYSTS': 1, 'STARFRUIT': 1}
 
 
 class Logger:
@@ -115,7 +115,8 @@ class Logger:
 
 '''TRADER BASE CLASS'''
 class BaseTrader:
-    DEFAULT_TRADER_DATA = {}
+    BASE_TRADER_DATA = {'volume': int}
+    TRADER_DATA = {}
     logger = None
 
     def with_logger(self, logger: Logger):
@@ -123,8 +124,11 @@ class BaseTrader:
         return self
 
     def run(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
-        for k, v in self.DEFAULT_TRADER_DATA.items():
+        for k, v in self.BASE_TRADER_DATA.items() | self.TRADER_DATA.items():
             trader_data[k] = defaultdict(v, trader_data[k]) if k in trader_data else defaultdict(v)
+
+        for product, trades in state.own_trades.items():
+            trader_data['volume'][product] += sum([trade.quantity for trade in trades if trade.timestamp == state.timestamp - 100])
 
         return self.algo(state, trader_data)
 
@@ -134,7 +138,7 @@ class BaseTrader:
 
 '''TRADER FOR STARFRUIT AND AMETHYSTS'''
 class AmethistsStarfruitTrader(BaseTrader):
-    DEFAULT_TRADER_DATA = {'ref_price': float, 'volume': int, 'inventory_loss': float, 'exposure': float}
+    TRADER_DATA = {'ref_price': float, 'inventory_loss': float, 'exposure': float}
 
     def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
         result = {}
@@ -144,10 +148,6 @@ class AmethistsStarfruitTrader(BaseTrader):
         for product in ['STARFRUIT', 'AMETHYSTS']:
             if product not in state.listings.keys(): continue
             self.logger.print(product)
-
-            # Save volume
-            if product in state.own_trades:
-                trader_data['volume'][product] += sum([trade.quantity for trade in state.own_trades[product] if trade.timestamp == state.timestamp - 100])
 
             # Compute reference price
             ref_price = self.compute_product_price(product, state, trader_data)
@@ -279,7 +279,7 @@ class AmethistsStarfruitTrader(BaseTrader):
 
 '''TRADER FOR ORCHIDS'''
 class OrchidsTrader(BaseTrader):
-    DEFAULT_TRADER_DATA = {'volume': int, 'exposure': float, 'ref_price': float}
+    TRADER_DATA = {'exposure': float, 'ref_price': float}
 
     def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
         result = {}
@@ -288,10 +288,6 @@ class OrchidsTrader(BaseTrader):
         for product in ['ORCHIDS']:
             if product not in state.listings.keys(): continue
             self.logger.print(product)
-
-            # Save volume
-            if product in state.own_trades:
-                trader_data['volume'][product] += sum([trade.quantity for trade in state.own_trades[product] if trade.timestamp == state.timestamp - 100])
 
             # Log exposure gain/loss
             conversion_observation = state.observations.conversionObservations[product]
@@ -361,22 +357,17 @@ class OrchidsTrader(BaseTrader):
 
         return orders, conversions
 
-# This one does hits stale orders in the markets
-class GiftBasketTrader2(BaseTrader):
-    DEFAULT_TRADER_DATA = {'ref_price': float, 'volume': int, 'inventory_loss': float, 'exposure': float}
+
+'''TRADER FOR THE GIFT BASKET'''
+class GiftBasketTrader(BaseTrader):
+    TRADER_DATA = {'ref_price': float, 'exposure': float}
 
     def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
-        result = {}
-        conversions = 0
-
-        # Create orders
-        for product in ['GIFT_BASKET']:
-            if product not in state.listings.keys(): continue
-            self.logger.print(product)
-
-            # Save volume
-            if product in state.own_trades:
-                trader_data['volume'][product] += sum([trade.quantity for trade in state.own_trades[product] if trade.timestamp == state.timestamp - 100])
+        books = {}
+        for product in ['GIFT_BASKET', 'CHOCOLATE', 'STRAWBERRIES', 'ROSES']:
+            if product not in state.listings.keys():
+                self.logger.print('Missing product', product)
+                return {}, 0
 
             # Compute reference price
             ref_price = self.compute_product_price(product, state, trader_data)
@@ -386,121 +377,12 @@ class GiftBasketTrader2(BaseTrader):
                 trader_data['exposure'][product] += (ref_price - trader_data['ref_price'][product]) * state.position.get(product, 0)
             trader_data['ref_price'][product] = ref_price
 
-            # Compute orders
-            if ref_price is None: continue
-            result[product] = self.compute_orders(product, ref_price, state, trader_data)
-
-        return result, conversions
-
-    def compute_product_price(self, product: str, state: TradingState, trader_data: dict) -> float:
-        match product:
-            case 'GIFT_BASKET':
-                bid_book = list(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
-                ask_book = list(sorted(state.order_depths[product].sell_orders.items()))
-                if not bid_book or not ask_book:
-                    self.logger.print('EMPTY BOOK!!!')
-                    return trader_data['ref_price'][product] if product in trader_data['ref_price'] else None
-
-                return (ask_book[-1][0] + bid_book[-1][0]) / 2
-
-    def compute_orders(self, product: str, ref_price: float, state: TradingState, trader_data: dict) -> List[Order]:
-        # Maximum positive exposure that we want to have if the profit is x
-        def buy_schedule(x: float) -> int:
-            match product:
-                case 'GIFT_BASKET':
-                    return min(60, round(x * 10))
-
-        # Maximum negative exposure that we want to have if the profit is x
-        def sell_schedule(x: float) -> int:
-            match product:
-                case 'GIFT_BASKET':
-                    return max(-60, round(-x * 10))
-
-        # Extract the relevant info from the trading_state
-        sold_position = state.position.get(product, 0)
-        bought_position = state.position.get(product, 0)
-
-        bid_book = list(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
-        ask_book = list(sorted(state.order_depths[product].sell_orders.items()))
-
-        # Placeholder for the emitted orders
-        result = []
-
-        # Removing stale orders
-        n_ask_book = []
-        for price, qty in ask_book:
-            curr_profit = ref_price - price
-            # we never take -EV trade, and the max positive exposure that we want to
-            # hold depends on the buy_schedule
-            executed_buy = min(buy_schedule(curr_profit) - bought_position, -qty)
-            if curr_profit >= 0 and executed_buy > 0:
-                result.append(Order(product, price, executed_buy))
-                bought_position += executed_buy
-                if executed_buy != -qty:
-                    n_ask_book.append((price, qty + executed_buy))
-            else:
-                n_ask_book.append((price, qty))
-                if curr_profit > 0:
-                    trader_data['inventory_loss'][product] += abs(curr_profit * qty)
-                    assert trader_data['inventory_loss'][product] >= 0
-
-        ask_book = n_ask_book
-
-        n_bid_book = []
-        for price, qty in bid_book:
-            curr_profit = price - ref_price
-            # we never take -EV trade, and the max negative exposure that we want to
-            # hold depends on the sell_schedule
-            executed_sell = min(sold_position - sell_schedule(curr_profit), qty)
-            if curr_profit >= 0 and executed_sell > 0:
-                result.append(Order(product, price, -executed_sell))
-                sold_position -= executed_sell
-                if executed_sell != qty:
-                    n_bid_book.append((price, qty - executed_sell))
-            else:
-                n_bid_book.append((price, qty))
-                if curr_profit > 0:
-                    trader_data['inventory_loss'][product] += abs(curr_profit * qty)
-                    assert trader_data['inventory_loss'][product] >= 0
-
-        return result
-
-'''TRADER FOR THE GIFT BASKET'''
-class GiftBasketTrader(BaseTrader):
-    DEFAULT_TRADER_DATA = {'ref_price': float, 'volume': int, 'inventory_loss': float, 'exposure': float}
-
-    def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
-        books = {} # might be used for algorithm, not necessary perse
-        for product in ['GIFT_BASKET', 'CHOCOLATE', 'STRAWBERRIES', 'ROSES']:
-            # Just logging, only for the visualizer
-            if product not in state.listings.keys():
-                self.logger.print('Missing product', product)
-                return {}, 0
-
-            # Save volume, only used for visualizer
-            if product in state.own_trades:
-                trader_data['volume'][product] += sum([trade.quantity for trade in state.own_trades[product] if trade.timestamp == state.timestamp - 100])
-
-            # Compute reference price
-            ref_price = self.compute_product_price(product, state, trader_data)
-
-            # Log exposure gain/loss, only for visualizer
-            if product in trader_data['ref_price']:
-                trader_data['exposure'][product] += (ref_price - trader_data['ref_price'][product]) * state.position.get(product, 0)
-            trader_data['ref_price'][product] = ref_price
-
-            # Create books
-            asks = OrderedDict[int, int](sorted(state.order_depths[product].sell_orders.items()))
-            bids = OrderedDict[int, int](sorted(state.order_depths[product].buy_orders.items(), reverse=True))
-            books[product] = (bids, asks) # might be used for algorithm, not necessary perse
-
         self.logger.print('GIFT_BASKET')
-        result = self.compute_orders_old(books, state, trader_data)
+        result = self.compute_orders(state, trader_data)
         conversions = 0
 
         return result, conversions
 
-    # Calculate mid price of product
     def compute_product_price(self, product: str, state: TradingState, trader_data: dict) -> float:
         bid_book = list(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
         ask_book = list(sorted(state.order_depths[product].sell_orders.items()))
@@ -509,138 +391,43 @@ class GiftBasketTrader(BaseTrader):
             return trader_data['ref_price'][product] if product in trader_data['ref_price'] else None
 
         return (ask_book[-1][0] + bid_book[-1][0]) / 2
-    
 
-    # Basically copy paste from Stanford guys. Some differences, basket std, basket components
-    def compute_orders_old(self, books: dict[str, tuple[OrderedDict, OrderedDict]], state: TradingState, trader_data: dict) -> dict[Symbol, list[Order]]:
-        prods = ['CHOCOLATE', 'STRAWBERRIES', 'ROSES', 'GIFT_BASKET']
-        orders = {'CHOCOLATE': [], 'STRAWBERRIES': [], 'ROSES': [], 'GIFT_BASKET': []}
 
-        osell, obuy, best_sell, best_buy, worst_sell, worst_buy, mid_price, vol_buy, vol_sell = {}, {}, {}, {}, {}, {}, {}, {}, {}
+    def compute_orders(self, state: TradingState, trader_data: dict) -> dict[Symbol, list[Order]]:
+        orders = defaultdict(list)
 
-        for p in prods:
-            # Ordered buys and sells
-            osell[p] = OrderedDict[int, int](sorted(state.order_depths[p].sell_orders.items()))
-            obuy[p] = OrderedDict[int, int](sorted(state.order_depths[p].buy_orders.items(), reverse=True))
+        gift_basket = trader_data['ref_price']['GIFT_BASKET']
+        chocolate = trader_data['ref_price']['CHOCOLATE']
+        strawberries = trader_data['ref_price']['STRAWBERRIES']
+        roses = trader_data['ref_price']['ROSES']
 
-            best_sell[p] = next(iter(osell[p]))
-            best_buy[p] = next(iter(obuy[p]))
+        basket_spread = gift_basket - (chocolate * 4 + strawberries * 6 + roses + 380)
+        self.logger.print('basket_spread', basket_spread)
 
-            worst_sell[p] = next(reversed(osell[p]))
-            worst_buy[p] = next(reversed(obuy[p]))
+        basket_std = 76
+        trade_at_to_sell = basket_std * 0.7
+        trade_at_to_buy = basket_std * 0.5
 
-            mid_price[p] = (best_sell[p] + best_buy[p]) / 2
-            vol_buy[p], vol_sell[p] = 0, 0
+        if basket_spread > trade_at_to_sell:
+            vol = state.position.get('GIFT_BASKET', 0) + POSITION_LIMIT['GIFT_BASKET']
+            worst_buy = min(state.order_depths['GIFT_BASKET'].buy_orders.keys())
 
-            for price, vol in obuy[p].items():
-                vol_buy[p] += vol
-                if vol_buy[p] >= POSITION_LIMIT[p] / 10:
-                    break
+            if vol > 0:
+                orders['GIFT_BASKET'].append(Order('GIFT_BASKET', worst_buy, -vol))
 
-            for price, vol in osell[p].items():
-                vol_sell[p] += -vol
-                if vol_sell[p] >= POSITION_LIMIT[p] / 10:
-                    break
+        elif basket_spread < -trade_at_to_buy:
+            vol = POSITION_LIMIT['GIFT_BASKET'] - state.position.get('GIFT_BASKET', 0)
+            worst_sell = max(state.order_depths['GIFT_BASKET'].sell_orders.keys())
 
-        # spread between components and gift basket, when price deviates std 0.5 open a position
-        res_quote = mid_price['GIFT_BASKET'] - mid_price['CHOCOLATE'] * 4 - mid_price['STRAWBERRIES'] * 6 - mid_price['ROSES'] - 380
-
-        basket_std = 75
-        trade_at = basket_std * 0.5
-
-        pb_pos = state.position.get('GIFT_BASKET', 0)
-        pb_neg = state.position.get('GIFT_BASKET', 0)
-
-        # Sell basket if basket overpriced
-        if res_quote > trade_at:
-            vol_max_basket = state.position.get('GIFT_BASKET', 0) + POSITION_LIMIT['GIFT_BASKET']
-            # vol_max_chocolate = POSITION_LIMIT['CHOCOLATE'] - state.position.get('CHOCOLATE', 0)
-            # vol_max_strawberries = POSITION_LIMIT['STRAWBERRIES'] - state.position.get('STRAWBERRIES', 0)
-            # vol_max_roses = POSITION_LIMIT['ROSES'] - state.position.get('ROSES', 0)
-            
-            if vol_max_basket > 0:
-                orders['GIFT_BASKET'].append(Order('GIFT_BASKET', worst_buy['GIFT_BASKET'], -vol_max_basket))
-                # orders['CHOCOLATE'].append(Order('CHOCOLATE', worst_sell['CHOCOLATE'], vol_max_chocolate))
-                # orders['STRAWBERRIES'].append(Order('STRAWBERRIES', worst_sell['STRAWBERRIES'], vol_max_strawberries))
-                # orders['ROSES'].append(Order('ROSES', worst_sell['ROSES'], vol_max_roses))
-                pb_neg -= vol_max_basket
-                
-        # Buy basket if basket underpriced
-        elif res_quote < -trade_at:
-            vol_max_basket = POSITION_LIMIT['GIFT_BASKET'] - state.position.get('GIFT_BASKET', 0)
-            # vol_max_chocolate = state.position.get('CHOCOLATE', 0) + POSITION_LIMIT['CHOCOLATE']
-            # vol_max_strawberries = state.position.get('STRAWBERRIES', 0) + POSITION_LIMIT['STRAWBERRIES']
-            # vol_max_roses = state.position.get('ROSES', 0) + POSITION_LIMIT['ROSES']
-            
-            if vol_max_basket > 0:
-                orders['GIFT_BASKET'].append(Order('GIFT_BASKET', worst_sell['GIFT_BASKET'], vol_max_basket))
-                # orders['CHOCOLATE'].append(Order('CHOCOLATE', worst_buy['CHOCOLATE'], -vol_max_chocolate))
-                # orders['STRAWBERRIES'].append(Order('STRAWBERRIES', worst_buy['STRAWBERRIES'], -vol_max_strawberries))
-                # orders['ROSES'].append(Order('ROSES', worst_buy['ROSES'], -vol_max_roses))
-                pb_pos += vol_max_basket
+            if vol > 0:
+                orders['GIFT_BASKET'].append(Order('GIFT_BASKET', worst_sell, vol))
 
         return orders
-
-    def compute_orders(self, books: dict[str, tuple[OrderedDict, OrderedDict]], state: TradingState, trader_data: dict) -> dict[Symbol, list[Order]]:
-        orders = defaultdict(lambda: defaultdict(int))
-
-        def get_avg_quote(book: OrderedDict, requested_volume: int, update_book: bool = False) -> float:
-            quotes = []
-            for price, qnt in book.items():
-                if len(quotes) < requested_volume and abs(qnt) > 0:
-                    vol = min(requested_volume - len(quotes), abs(qnt))
-                    for _ in range(vol):
-                        quotes.append(price)
-                        if update_book: book[price] += 1 if qnt < 0 else -1
-
-                if len(quotes) == requested_volume: return stat.mean(quotes)
-
-            return None
-
-        def fill_qnt(book: OrderedDict, requested_volume: int, update_book: bool = True) -> List[tuple[int, int]]:
-            orders = []
-            filled_vol = 0
-            for price, qnt in book.items():
-                if len(orders) < requested_volume and abs(qnt) > 0:
-                    vol = min(requested_volume - filled_vol, abs(qnt))
-                    if vol > 0:
-                        orders.append((price, vol if qnt < 0 else -vol))
-                        if update_book: book[price] += vol if qnt < 0 else -vol
-                        filled_vol += vol
-
-            return orders
-
-        for direction in range(2):
-            while True:
-                avg_ask_gift = get_avg_quote(books['GIFT_BASKET'][1 - direction], 1)
-                avg_ask_choco = get_avg_quote(books['CHOCOLATE'][1 - direction], 4)
-                avg_ask_straw = get_avg_quote(books['STRAWBERRIES'][1 - direction], 6)
-                avg_ask_roses = get_avg_quote(books['ROSES'][1 - direction], 1)
-
-                if avg_ask_gift is None or avg_ask_choco is None or avg_ask_straw is None or avg_ask_roses is None: break
-
-                basket_nav_bid = 4 * avg_ask_choco + 6 * avg_ask_straw + avg_ask_roses + 380
-
-                if abs(avg_ask_gift - basket_nav_bid) > 30 :
-                    for price, vol in fill_qnt(books['GIFT_BASKET'][1 - direction], 1): orders['GIFT_BASKET'][price] += vol
-                    for price, vol in fill_qnt(books['CHOCOLATE'][1 - direction], 4): orders['CHOCOLATE'][price] += vol
-                    for price, vol in fill_qnt(books['STRAWBERRIES'][1 - direction], 6): orders['STRAWBERRIES'][price] += vol
-                    for price, vol in fill_qnt(books['ROSES'][1 - direction], 1): orders['ROSES'][price] += vol
-
-                else: break
-
-        result = defaultdict(list)
-
-        for product, product_orders in orders.items():
-            for price, qnt in product_orders.items():
-                result[product].append(Order(product, price, qnt))
-
-        return result
 
 
 class Trader:
     logger = Logger()
-    TRADERS = [AmethistsStarfruitTrader(), OrchidsTrader(), GiftBasketTrader2(), GiftBasketTrader()]
+    TRADERS = [AmethistsStarfruitTrader(), OrchidsTrader(), GiftBasketTrader()]
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         # Load or create trader data
