@@ -99,7 +99,7 @@ class Trader:
         for product in state.order_depths.keys():
             inventory_current = state.position.get(product, 0)
             if not inventory_current:
-                result[product] = [Order(product, min(state.order_depths[product].sell_orders.keys()), 1)]
+                result[product] = [Order(product, min(state.order_depths[product].buy_orders.keys()), -1)]
 
         self.logger.flush(state, result, 0, '')
 

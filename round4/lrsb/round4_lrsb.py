@@ -1,11 +1,13 @@
 import math
-import statistics as stat
 from collections import *
 from typing import *
 
 from datamodel import *
 
-POSITION_LIMIT = {'AMETHYSTS': 20, 'STARFRUIT': 20, 'ORCHIDS': 100, 'CHOCOLATE': 250, 'STRAWBERRIES': 350, 'ROSES': 60, 'GIFT_BASKET': 60}
+POSITION_LIMIT = {'AMETHYSTS': 20, 'STARFRUIT': 20,
+                  'ORCHIDS': 100,
+                  'CHOCOLATE': 250, 'STRAWBERRIES': 350, 'ROSES': 60, 'GIFT_BASKET': 60,
+                  'COCONUT': 300, 'COCONUT_COUPON': 600}
 UNDERCUT_SPREAD = {'AMETHYSTS': 1, 'STARFRUIT': 1}
 
 
@@ -424,9 +426,68 @@ class GiftBasketTrader(BaseTrader):
         return orders
 
 
+'''TRADER FOR COCONUT'''
+class CoconutTrader(BaseTrader):
+    TRADER_DATA = {'exposure': float, 'ref_price': float}
+
+    def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
+        for product in ['COCONUT', 'COCONUT_COUPON']:
+            if product not in state.listings.keys(): continue
+            self.logger.print(product)
+
+            # Compute reference price
+            ref_price = self.compute_product_price(product, state, trader_data)
+
+            # Log exposure gain/loss
+            if product in trader_data['ref_price']:
+                trader_data['exposure'][product] += (ref_price - trader_data['ref_price'][product]) * state.position.get(product, 0)
+            trader_data['ref_price'][product] = ref_price
+
+        # Generate orders
+        result = self.compute_orders(state, trader_data)
+        conversions = 0
+
+        return result, conversions
+
+    def compute_product_price(self, product: str, state: TradingState, trader_data: dict) -> float:
+        bid_book = list(sorted(state.order_depths[product].buy_orders.items(), reverse=True))
+        ask_book = list(sorted(state.order_depths[product].sell_orders.items()))
+        if not bid_book or not ask_book:
+            self.logger.print('EMPTY BOOK!!!')
+            return trader_data['ref_price'][product] if product in trader_data['ref_price'] else None
+
+        return (ask_book[-1][0] + bid_book[-1][0]) / 2
+
+    def compute_orders(self, state: TradingState, trader_data: dict) -> dict[Symbol, list[Order]]:
+        orders = defaultdict(list)
+
+        coupon_spread = trader_data['ref_price']['COCONUT_COUPON'] - 637.63
+        self.logger.print('coupon_spread', coupon_spread)
+
+        basket_std = 46.5
+        trade_at_to_sell = basket_std * 0.5
+        trade_at_to_buy = basket_std * 0.5
+
+        if coupon_spread > trade_at_to_buy:
+            vol = POSITION_LIMIT['COCONUT'] - state.position.get('COCONUT', 0)
+            worst_sell = max(state.order_depths['COCONUT'].sell_orders.keys())
+
+            if vol > 0:
+                orders['COCONUT'].append(Order('COCONUT', worst_sell, vol))
+
+        if coupon_spread < -trade_at_to_sell:
+            vol = state.position.get('COCONUT', 0) + POSITION_LIMIT['COCONUT']
+            worst_buy = min(state.order_depths['COCONUT'].buy_orders.keys())
+
+            if vol > 0:
+                orders['COCONUT'].append(Order('COCONUT', worst_buy, -vol))
+
+        return orders
+
+
 class Trader:
     logger = Logger()
-    TRADERS = [AmethistsStarfruitTrader(), OrchidsTrader(), GiftBasketTrader()]
+    TRADERS = [AmethistsStarfruitTrader(), OrchidsTrader(), GiftBasketTrader(), CoconutTrader()]
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         # Load or create trader data
