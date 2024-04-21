@@ -1,6 +1,9 @@
 import math
 from collections import *
+from statistics import NormalDist
 from typing import *
+
+import numpy as np
 
 from datamodel import *
 
@@ -406,19 +409,29 @@ class GiftBasketTrader(BaseTrader):
         self.logger.print('basket_spread', basket_spread)
 
         basket_std = 76
-        trade_at_to_sell = basket_std * 0.7
-        trade_at_to_buy = basket_std * 0.5
+        trade_at = basket_std * 0.5
 
-        if basket_spread > trade_at_to_sell:
+        basket_state = trader_data.get('basket_state', '')
+
+        def get_max_vol(book: dict) -> int:
+            return abs(sum([qnt for _, qnt in book.items()]))
+
+        if basket_spread > trade_at or basket_state == 'BUY':
             vol = state.position.get('GIFT_BASKET', 0) + POSITION_LIMIT['GIFT_BASKET']
             worst_buy = min(state.order_depths['GIFT_BASKET'].buy_orders.keys())
+
+            if get_max_vol(state.order_depths['GIFT_BASKET'].buy_orders) < vol: trader_data['basket_state'] = 'BUY'
+            else: trader_data['basket_state'] = ''
 
             if vol > 0:
                 orders['GIFT_BASKET'].append(Order('GIFT_BASKET', worst_buy, -vol))
 
-        elif basket_spread < -trade_at_to_buy:
+        if basket_spread < -trade_at or basket_state == 'SELL':
             vol = POSITION_LIMIT['GIFT_BASKET'] - state.position.get('GIFT_BASKET', 0)
             worst_sell = max(state.order_depths['GIFT_BASKET'].sell_orders.keys())
+
+            if get_max_vol(state.order_depths['GIFT_BASKET'].sell_orders) < vol: trader_data['basket_state'] = 'SELL'
+            else: trader_data['basket_state'] = ''
 
             if vol > 0:
                 orders['GIFT_BASKET'].append(Order('GIFT_BASKET', worst_sell, vol))
@@ -432,8 +445,9 @@ class CoconutTrader(BaseTrader):
 
     def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
         for product in ['COCONUT', 'COCONUT_COUPON']:
-            if product not in state.listings.keys(): continue
-            self.logger.print(product)
+            if product not in state.listings.keys():
+                self.logger.print('Missing product', product)
+                return {}, 0
 
             # Compute reference price
             ref_price = self.compute_product_price(product, state, trader_data)
@@ -461,26 +475,32 @@ class CoconutTrader(BaseTrader):
     def compute_orders(self, state: TradingState, trader_data: dict) -> dict[Symbol, list[Order]]:
         orders = defaultdict(list)
 
-        coupon_spread = trader_data['ref_price']['COCONUT_COUPON'] - 637.63
-        self.logger.print('coupon_spread', coupon_spread)
+        def black_scholes_price(S, K, t, r, sigma, option_type='call'):
+            d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * t) / (sigma * np.sqrt(t))
+            d2 = d1 - sigma * np.sqrt(t)
+            if option_type == 'call':
+                price = S * NormalDist().cdf(d1) - K * np.exp(-r * t) * NormalDist().cdf(d2)
+            else:
+                price = K * np.exp(-r * t) * NormalDist().cdf(-d2) - S * NormalDist().cdf(-d1)
+            return price
 
-        basket_std = 46.5
-        trade_at_to_sell = basket_std * 0.5
-        trade_at_to_buy = basket_std * 0.5
+        std = 0.169565
+        r = 0.024521838
 
-        if coupon_spread > trade_at_to_buy:
-            vol = POSITION_LIMIT['COCONUT'] - state.position.get('COCONUT', 0)
-            worst_sell = max(state.order_depths['COCONUT'].sell_orders.keys())
+        coupon_price = black_scholes_price(trader_data['ref_price']['COCONUT'], 10000, 246 / 365, r, std)
+        self.logger.print('coupon_price', coupon_price)
 
-            if vol > 0:
-                orders['COCONUT'].append(Order('COCONUT', worst_sell, vol))
+        # Sell
+        vol = state.position.get('COCONUT_COUPON', 0) + POSITION_LIMIT['COCONUT_COUPON']
+        worst_buy = math.ceil(coupon_price)
+        if vol > 0:
+            orders['COCONUT_COUPON'].append(Order('COCONUT_COUPON', worst_buy, -vol))
 
-        if coupon_spread < -trade_at_to_sell:
-            vol = state.position.get('COCONUT', 0) + POSITION_LIMIT['COCONUT']
-            worst_buy = min(state.order_depths['COCONUT'].buy_orders.keys())
-
-            if vol > 0:
-                orders['COCONUT'].append(Order('COCONUT', worst_buy, -vol))
+        # Buy
+        vol = POSITION_LIMIT['COCONUT_COUPON'] - state.position.get('COCONUT_COUPON', 0)
+        worst_sell = math.floor(coupon_price)
+        if vol > 0:
+            orders['COCONUT_COUPON'].append(Order('COCONUT_COUPON', worst_sell, vol))
 
         return orders
 
