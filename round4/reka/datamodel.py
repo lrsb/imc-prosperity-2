@@ -17,8 +17,8 @@ class Listing:
         self.symbol = symbol
         self.product = product
         self.denomination = denomination
-        
-                 
+
+
 class ConversionObservation:
 
     def __init__(self, bidPrice: float, askPrice: float, transportFees: float, exportTariff: float, importTariff: float, sunlight: float, humidity: float):
@@ -29,17 +29,17 @@ class ConversionObservation:
         self.importTariff = importTariff
         self.sunlight = sunlight
         self.humidity = humidity
-        
+
 
 class Observation:
 
     def __init__(self, plainValueObservations: Dict[Product, ObservationValue], conversionObservations: Dict[Product, ConversionObservation]) -> None:
         self.plainValueObservations = plainValueObservations
         self.conversionObservations = conversionObservations
-        
+
     def __str__(self) -> str:
         return "(plainValueObservations: " + jsonpickle.encode(self.plainValueObservations) + ", conversionObservations: " + jsonpickle.encode(self.conversionObservations) + ")"
-     
+
 
 class Order:
 
@@ -53,14 +53,20 @@ class Order:
 
     def __repr__(self) -> str:
         return "(" + self.symbol + ", " + str(self.price) + ", " + str(self.quantity) + ")"
-    
+
 
 class OrderDepth:
 
-    def __init__(self, buy_orders={}, sell_orders={}):
-        self.buy_orders: Dict[int, int] = buy_orders
-        self.sell_orders: Dict[int, int] = sell_orders
+    def __init__(self):
+        self.buy_orders: Dict[int, int] = {}
+        self.sell_orders: Dict[int, int] = {}
 
+
+    def __str__(self) -> str:
+        return "( buy_orders: " + str(self.buy_orders) + ", sell_orders: " + str(self.sell_orders) + ")"
+
+    def __repr__(self) -> str:
+        return "( buy_orders: " + str(self.buy_orders) + ", sell_orders: " + str(self.sell_orders) + ")"
 
 class Trade:
 
@@ -98,12 +104,12 @@ class TradingState(object):
         self.market_trades = market_trades
         self.position = position
         self.observations = observations
-        
+
     def toJSON(self):
         return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True)
 
-    
+
 class ProsperityEncoder(JSONEncoder):
 
-        def default(self, o):
-            return o.__dict__
+    def default(self, o):
+        return o.__dict__
