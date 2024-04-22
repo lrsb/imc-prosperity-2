@@ -11,7 +11,7 @@ POSITION_LIMIT = {'AMETHYSTS': 20, 'STARFRUIT': 20,
                   'ORCHIDS': 100,
                   'CHOCOLATE': 250, 'STRAWBERRIES': 350, 'ROSES': 60, 'GIFT_BASKET': 60,
                   'COCONUT': 300, 'COCONUT_COUPON': 600}
-UNDERCUT_SPREAD = {'AMETHYSTS': 1, 'STARFRUIT': 1}
+UNDERCUT_SPREAD = {'AMETHYSTS': 1, 'STARFRUIT': 1, 'COCONUT_COUPON': 1}
 
 
 class Logger:
@@ -458,6 +458,7 @@ class CoconutTrader(BaseTrader):
             trader_data['ref_price'][product] = ref_price
 
         # Generate orders
+        self.logger.print('COCONUT_COUPON')
         result = self.compute_orders(state, trader_data)
         conversions = 0
 
@@ -473,7 +474,20 @@ class CoconutTrader(BaseTrader):
         return (ask_book[-1][0] + bid_book[-1][0]) / 2
 
     def compute_orders(self, state: TradingState, trader_data: dict) -> dict[Symbol, list[Order]]:
-        orders = defaultdict(list)
+        def newton_step(f, x0):
+            def df(x):
+                dx = 0.00001
+                return (f(x + dx) - f(x)) / dx
+            return x0 - f(x0) / df(x0)
+
+        def newton(f, x0, tol=10**-8):
+            while abs(newton_step(f, x0) - x0) > tol:
+                x0 = newton_step(f, x0)
+            return x0
+
+        def implied_volatility(market_price, S, K, t, r, initial_guess=0.2):
+            objective_function = lambda sigma: black_scholes_price(S, K, t, r, sigma) - market_price
+            return newton(objective_function, initial_guess)
 
         def black_scholes_price(S, K, t, r, sigma, option_type='call'):
             d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * t) / (sigma * np.sqrt(t))
@@ -484,23 +498,32 @@ class CoconutTrader(BaseTrader):
                 price = K * np.exp(-r * t) * NormalDist().cdf(-d2) - S * NormalDist().cdf(-d1)
             return price
 
-        std = 0.169565
-        r = 0.024521838
+        r = 0.01
+        iv = implied_volatility(637.63, 10000, 10000, 246 / 365, r)
 
-        coupon_price = black_scholes_price(trader_data['ref_price']['COCONUT'], 10000, 246 / 365, r, std)
-        self.logger.print('coupon_price', coupon_price)
+        coupon_price = black_scholes_price(trader_data['ref_price']['COCONUT'], 10000, 246 / 365, r, iv)
+        spread = trader_data['ref_price']['COCONUT_COUPON'] - coupon_price
+        self.logger.print('coupon_price', coupon_price, 'spread', spread, 'iv', iv)
+
+        orders = defaultdict(list)
 
         # Sell
         vol = state.position.get('COCONUT_COUPON', 0) + POSITION_LIMIT['COCONUT_COUPON']
-        worst_buy = math.ceil(coupon_price)
+
+        sell_price = math.ceil(coupon_price) + UNDERCUT_SPREAD['COCONUT_COUPON']
+        buy_orders = state.order_depths['COCONUT_COUPON'].buy_orders
+        worst_bid = max(buy_orders.keys()) if buy_orders.keys() else sell_price
         if vol > 0:
-            orders['COCONUT_COUPON'].append(Order('COCONUT_COUPON', worst_buy, -vol))
+            orders['COCONUT_COUPON'].append(Order('COCONUT_COUPON', max(sell_price, worst_bid), -vol))
 
         # Buy
         vol = POSITION_LIMIT['COCONUT_COUPON'] - state.position.get('COCONUT_COUPON', 0)
-        worst_sell = math.floor(coupon_price)
+
+        buy_price = math.floor(coupon_price) - UNDERCUT_SPREAD['COCONUT_COUPON']
+        sell_orders = state.order_depths['COCONUT_COUPON'].sell_orders
+        worst_ask = max(sell_orders.keys()) if sell_orders.keys() else buy_price
         if vol > 0:
-            orders['COCONUT_COUPON'].append(Order('COCONUT_COUPON', worst_sell, vol))
+            orders['COCONUT_COUPON'].append(Order('COCONUT_COUPON', min(buy_price, worst_ask), vol))
 
         return orders
 
