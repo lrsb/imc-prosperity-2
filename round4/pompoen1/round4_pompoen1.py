@@ -475,20 +475,28 @@ class CoconutTrader(BaseTrader):
     def compute_orders(self, state: TradingState, trader_data: dict) -> dict[Symbol, list[Order]]:
         orders = defaultdict(list)
 
-        coupon_price = 637.63 + trader_data['ref_price']['COCONUT'] - 10000 
-        self.logger.print('coupon_price', coupon_price)
+        ref_price_coconut = trader_data['ref_price']['COCONUT']
+        ref_price_coupon = trader_data['ref_price']['COCONUT_COUPON']
+        coupon_ev = 637.63 + ref_price_coconut - 10000 
+        self.logger.print('coupon_price', coupon_ev)
 
         # Sell
         vol = state.position.get('COCONUT_COUPON', 0) + POSITION_LIMIT['COCONUT_COUPON']
-        worst_buy = math.ceil(coupon_price) + 1
-        if vol > 0:
+        worst_buy = math.ceil(ref_price_coupon)
+        if (coupon_ev > ref_price_coupon + 5) and vol > 0:
             orders['COCONUT_COUPON'].append(Order('COCONUT_COUPON', worst_buy, -vol))
+
+            vol = state.position.get('COCONUT', 0) + POSITION_LIMIT['COCONUT']
+            orders['COCONUT'].append(Order('COCONUT', math.ceil(ref_price_coconut), -vol))
 
         # Buy
         vol = POSITION_LIMIT['COCONUT_COUPON'] - state.position.get('COCONUT_COUPON', 0)
-        worst_sell = math.floor(coupon_price) - 1
-        if vol > 0:
+        worst_sell = math.floor(ref_price_coupon - 1)
+        if (coupon_ev < ref_price_coupon - 5) and vol > 0:
             orders['COCONUT_COUPON'].append(Order('COCONUT_COUPON', worst_sell, vol))
+            
+            vol = POSITION_LIMIT['COCONUT'] - state.position.get('COCONUT', 0)
+            orders['COCONUT'].append(Order('COCONUT', math.floor(ref_price_coconut), vol))
 
         return orders
 
