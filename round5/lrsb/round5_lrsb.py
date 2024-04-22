@@ -120,7 +120,7 @@ class Logger:
 
 '''TRADER BASE CLASS'''
 class BaseTrader:
-    BASE_TRADER_DATA = {'volume': int}
+    BASE_TRADER_DATA = {'volume': int, 'signal': float}  # >1 buy, >0> close, >-1 sell
     TRADER_DATA = {}
     logger = None
 
@@ -135,7 +135,25 @@ class BaseTrader:
         for product, trades in state.own_trades.items():
             trader_data['volume'][product] += sum([trade.quantity for trade in trades if trade.timestamp == state.timestamp - 100])
 
-        return self.algo(state, trader_data)
+        orders, conversions = self.algo(state, trader_data)
+
+        for product, signal in trader_data['signal'].items():
+            if signal >= 1:
+                worst_sell = max(state.order_depths[product].sell_orders.keys())
+                vol = POSITION_LIMIT[product] - state.position.get(product, 0)
+                if vol > 0: orders[product] = [Order(product, worst_sell, vol)]
+
+            elif signal <= -1:
+                worst_buy = min(state.order_depths[product].buy_orders.keys())
+                vol = -state.position.get(product, 0) - POSITION_LIMIT[product]
+                if vol < 0: orders[product] = [Order(product, worst_buy, vol)]
+
+            else:
+                worst = min(state.order_depths[product].buy_orders.keys()) if state.position.get(product, 0) > 0 else max(state.order_depths[product].sell_orders.keys())
+                vol = -state.position.get(product, 0)
+                if vol != 0: orders[product] = [Order(product, worst, vol)]
+
+        return orders, conversions
 
     def algo(self, state: TradingState, trader_data: dict) -> tuple[dict[Symbol, list[Order]], int]:
         assert False, 'not implemented'
@@ -384,6 +402,21 @@ class GiftBasketTrader(BaseTrader):
         self.logger.print('GIFT_BASKET')
         result = self.compute_orders(state, trader_data)
         conversions = 0
+
+        for order in state.market_trades.get('ROSES', []):
+            if order.timestamp != state.timestamp - 100: continue
+            if order.buyer == 'Rhianna':
+                trader_data['signal']['ROSES'] = 1
+            if order.seller == 'Rhianna':
+                trader_data['signal']['ROSES'] = -1
+
+        for order in state.market_trades.get('CHOCOLATE', []):
+            if order.timestamp != state.timestamp - 100: continue
+            if order.buyer == 'Vladimir':
+                if trader_data['signal']['CHOCOLATE'] == -1:
+                    trader_data['signal']['CHOCOLATE'] = 0
+                else:
+                    trader_data['signal']['CHOCOLATE'] -= 0.5
 
         return result, conversions
 
